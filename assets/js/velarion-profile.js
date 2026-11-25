@@ -147,31 +147,78 @@
       key: "core",
       jsId: "velarion-profile-core-js",
       js: "velarion-profile-core.js",
-      global: "VelarionProfileCore"
+      global: "VelarionProfileCore",
+      jsOrder: 10
     },
     {
       key: "document",
       cssId: "velarion-profile-document-css",
       css: "velarion-profile-document.css",
+      cssOrder: 20,
       jsId: "velarion-profile-document-js",
       js: "velarion-profile-document.js",
-      global: "VelarionProfileDocument"
+      global: "VelarionProfileDocument",
+      jsOrder: 20
     },
     {
       key: "progression",
       cssId: "velarion-profile-progression-css",
       css: "velarion-profile-progression.css",
+      cssOrder: 30,
       jsId: "velarion-profile-progression-js",
       js: "velarion-profile-progression.js",
-      global: "VelarionProfileProgression"
+      global: "VelarionProfileProgression",
+      jsOrder: 30
+    },
+    {
+      key: "username",
+      cssId: "velarion-profile-username-css",
+      css: "velarion-profile-username.css",
+      cssOrder: 40,
+      jsId: "velarion-profile-username-js",
+      js: "velarion-profile-username.js",
+      global: "VelarionProfileUsername",
+      jsOrder: 40
+    },
+    {
+      key: "stats",
+      cssId: "velarion-profile-stats-css",
+      css: "velarion-profile-stats.css",
+      cssOrder: 50,
+      jsId: "velarion-profile-stats-js",
+      js: "velarion-profile-stats.js",
+      global: "VelarionProfileStats",
+      jsOrder: 50
+    },
+    {
+      key: "cargo",
+      cssId: "velarion-profile-cargo-css",
+      css: "velarion-profile-cargo.css",
+      cssOrder: 60,
+      jsId: "velarion-profile-cargo-js",
+      js: "velarion-profile-cargo.js",
+      global: "VelarionProfileCargo",
+      jsOrder: 60
+    },
+    {
+      key: "rank",
+      cssId: "velarion-profile-rank-css",
+      css: "velarion-profile-rank.css",
+      cssOrder: 70,
+      jsId: "velarion-profile-rank-js",
+      js: "velarion-profile-rank.js",
+      global: "VelarionProfileRank",
+      jsOrder: 70
     },
     {
       key: "public-record",
       cssId: "velarion-profile-public-record-css",
       css: "velarion-profile-public-record.css",
+      cssOrder: 90,
       jsId: "velarion-profile-public-record-js",
       js: "velarion-profile-public-record.js",
-      global: "VelarionProfilePublicRecord"
+      global: "VelarionProfilePublicRecord",
+      jsOrder: 90
     }
   ];
 
@@ -202,7 +249,11 @@
   function ensureProfileComponentStyles() {
     let anchor = findProfileStylesheetAnchor();
 
-    PROFILE_COMPONENT_ASSETS.filter((asset) => asset.css).forEach((asset) => {
+    PROFILE_COMPONENT_ASSETS
+      .filter((asset) => asset.css)
+      .slice()
+      .sort((a, b) => (a.cssOrder || 0) - (b.cssOrder || 0))
+      .forEach((asset) => {
       let link = document.getElementById(asset.cssId);
       if (!link) {
         link = document.createElement("link");
@@ -264,6 +315,8 @@
     if (!profileComponentsReadyPromise) {
       profileComponentsReadyPromise = PROFILE_COMPONENT_ASSETS
         .filter((asset) => asset.js)
+        .slice()
+        .sort((a, b) => (a.jsOrder || 0) - (b.jsOrder || 0))
         .reduce(
           (chain, asset) => chain.then(() => ensureProfileComponentScript(asset)),
           Promise.resolve()
@@ -471,16 +524,6 @@
     if (!achievements.length) {
       return `
         <section class="vl-achievements-card vl-achievements-card--source" data-achievement-count="0">
-          <header class="vl-achievements-card__header">
-            <div class="vl-achievements-header-help" tabindex="0" aria-describedby="vl-achievements-tooltip">
-              <span aria-hidden="true">◆</span>
-              <strong>Conquistas</strong>
-              <span id="vl-achievements-tooltip" class="vl-achievements-header-tooltip" role="tooltip">
-                Conquistas especiais desbloqueadas e registradas neste perfil.
-              </span>
-            </div>
-            <span class="vl-achievements-card__total">0 totais</span>
-          </header>
           <div class="vl-achievements-empty">Nenhuma conquista exibida.</div>
         </section>`;
     }
@@ -528,17 +571,6 @@
 
     return `
       <section class="vl-achievements-card vl-achievements-card--source" data-achievement-count="${achievements.length}">
-        <header class="vl-achievements-card__header">
-          <div class="vl-achievements-header-help" tabindex="0" aria-describedby="vl-achievements-tooltip">
-            <span aria-hidden="true">◆</span>
-            <strong>Conquistas</strong>
-            <span id="vl-achievements-tooltip" class="vl-achievements-header-tooltip" role="tooltip">
-              Conquistas especiais desbloqueadas e registradas neste perfil.
-            </span>
-          </div>
-          <span class="vl-achievements-card__total">${achievements.length} ${achievements.length === 1 ? "total" : "totais"}</span>
-        </header>
-
         <div class="achievement-gallery-list" aria-label="Medalhas de conquistas">
           ${medals}
         </div>
@@ -820,8 +852,48 @@
     return values.map(normalizeSocialKey).filter(Boolean);
   }
 
+  function makeSocialFallbackIndex(root) {
+    const index = new Map();
+
+    Object.entries(root || {}).forEach(([definitionKey, definition]) => {
+      if (!definition || typeof definition !== "object" || Array.isArray(definition)) return;
+
+      socialDefinitionAliases(definition, definitionKey).forEach((alias) => {
+        if (alias && !index.has(alias)) {
+          index.set(alias, { key: definitionKey, data: definition });
+        }
+      });
+    });
+
+    return index;
+  }
+
+  function getSocialVisualDefinition(definition) {
+    if (!definition || typeof definition !== "object" || Array.isArray(definition)) return {};
+
+    const rootVisual = definition.visual && typeof definition.visual === "object" && !Array.isArray(definition.visual)
+      ? definition.visual
+      : {};
+    const rootStyle = definition.style && typeof definition.style === "object" && !Array.isArray(definition.style)
+      ? definition.style
+      : {};
+    const website = definition.website && typeof definition.website === "object" && !Array.isArray(definition.website)
+      ? definition.website
+      : {};
+
+    /* V20.55 — social_fallback é livre por nome: campos visuais podem ficar
+       diretamente na definição, em visual/style ou em website. website vence. */
+    return {
+      ...definition,
+      ...rootVisual,
+      ...rootStyle,
+      ...website
+    };
+  }
+
   function resolveSocialFallback(panel, socialKey, socialValue) {
     const root = getSocialFallbackRoot(panel);
+    const index = makeSocialFallbackIndex(root);
     const key = normalizeSocialKey(socialKey);
 
     const valueObject =
@@ -835,49 +907,29 @@
       valueObject.website_social_type
     );
 
-    /* 1. Correspondência literal pelo nome do objeto. */
-    if (key && root[key] && typeof root[key] === "object") {
-      return { key, data: root[key], source: "exact-key" };
+    /* V20.55 — sincronização genérica por NOME.
+       Qualquer chave criada em profilePlayers.<id>.website_social recebe
+       automaticamente o visual da chave homônima em website_panel.social_fallback,
+       sem precisar cadastrar a rede no JavaScript. */
+    if (key && index.has(key)) {
+      const match = index.get(key);
+      return { ...match, source: normalizeSocialKey(match.key) === key ? "name-sync" : "definition-alias" };
     }
 
-    /* 2. Variações normalizadas e aliases conhecidos (ex.: X/Twitter, *_url, *_link). */
+    /* Variações continuam disponíveis para compatibilidade legada. */
     for (const variant of socialKeyVariants(key)) {
-      if (variant !== key && root[variant] && typeof root[variant] === "object") {
-        return { key: variant, data: root[variant], source: "key-variant" };
-      }
+      if (!variant || variant === key || !index.has(variant)) continue;
+      return { ...index.get(variant), source: "key-variant" };
     }
 
-    /* 3. Aliases declarados dentro da própria definição.
-       Isso permite adicionar novas redes no website_panel sem alterar o renderer. */
-    for (const [definitionKey, definition] of Object.entries(root)) {
-      if (!definition || typeof definition !== "object" || Array.isArray(definition)) continue;
-      if (socialDefinitionAliases(definition, definitionKey).includes(key)) {
-        return { key: definitionKey, data: definition, source: "definition-alias" };
-      }
+    /* Type explícito pode apontar para qualquer nome visual existente. */
+    if (explicitType && explicitType !== "website_social" && index.has(explicitType)) {
+      return { ...index.get(explicitType), source: "explicit-type" };
     }
 
-    /* 4. Type explícito só substitui a chave quando nomeia um visual concreto. */
-    if (
-      explicitType &&
-      explicitType !== "website_social" &&
-      root[explicitType] &&
-      typeof root[explicitType] === "object"
-    ) {
-      return { key: explicitType, data: root[explicitType], source: "explicit-type" };
-    }
-
-    /* 5. Também permite type=x/twitter com compatibilidade cruzada. */
-    if (explicitType === "x" && root.twitter && typeof root.twitter === "object") {
-      return { key: "twitter", data: root.twitter, source: "type-x-twitter-alias" };
-    }
-
-    if (explicitType === "twitter" && root.x && typeof root.x === "object") {
-      return { key: "x", data: root.x, source: "type-twitter-x-alias" };
-    }
-
-    /* 6. Fallback apenas quando realmente não houver definição. */
-    if (root.default && typeof root.default === "object") {
-      return { key: "default", data: root.default, source: "default" };
+    /* Fallback apenas quando realmente não houver definição com o mesmo nome. */
+    if (index.has("default")) {
+      return { ...index.get("default"), source: "default" };
     }
 
     return null;
@@ -1039,10 +1091,7 @@
         ${entries.map((entry) => {
           const resolved = resolveSocialFallback(panel, entry.key, entry.raw);
           const definition = resolved?.data || {};
-          const website =
-            definition?.website && typeof definition.website === "object"
-              ? definition.website
-              : {};
+          const website = getSocialVisualDefinition(definition);
 
           if (definition.enabled === false) return "";
 
@@ -1082,19 +1131,36 @@
           const particles = website.particles === true;
           const shimmer = website.shimmer === true;
 
+          const customCssVars = (() => {
+            const source = website.css_vars || website.cssVars || {};
+            if (!source || typeof source !== "object" || Array.isArray(source)) return [];
+
+            return Object.entries(source)
+              .filter(([name, value]) => /^--vl-social-[a-z0-9_-]+$/i.test(String(name || "")) && value != null)
+              .map(([name, value]) => `${String(name)}:${esc(cleanValue(value))}`)
+              .filter((item) => !/:$/.test(item));
+          })();
+
           const style = [
             `--vl-social-color:${esc(color)}`,
             `--vl-social-color-2:${esc(color2)}`,
             `--vl-social-glow:${esc(glow)}`,
             `--vl-social-intensity:${intensity}`,
-            gradient ? `--vl-social-gradient:${esc(gradient)}` : ""
+            gradient ? `--vl-social-gradient:${esc(gradient)}` : "",
+            ...customCssVars
           ].filter(Boolean).join(";");
+
+          const customClasses = cleanValue(website.classes || website.class_name || website.className)
+            .split(/\s+/)
+            .map((item) => item.trim())
+            .filter((item) => /^vl-social-[a-z0-9_-]+$/i.test(item));
 
           const classes = [
             "vl-social-clan-card",
             aura ? "has-aura" : "",
             particles ? "has-particles" : "",
-            shimmer ? "has-shimmer" : ""
+            shimmer ? "has-shimmer" : "",
+            ...customClasses
           ].filter(Boolean).join(" ");
 
           const inner = `
@@ -1248,11 +1314,68 @@
     };
   }
 
+  const PROFILE_CHARACTER_SLOT_IDS = ["id_1", "id_2", "id_3", "id_4"];
+
+  function getProfileCharacterSlotIds(player) {
+    const core = window.VelarionProfileCore;
+    if (core && typeof core.getCharacterSlotIds === "function") {
+      const ids = core.getCharacterSlotIds(player);
+      return PROFILE_CHARACTER_SLOT_IDS.filter((id) => Array.isArray(ids) && ids.includes(id));
+    }
+    const raw = player?.theme?.card_embed?.character_slots;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return ["id_1"];
+    return PROFILE_CHARACTER_SLOT_IDS.filter((id) => {
+      const value = raw[id];
+      return Boolean(value && value !== false && typeof value === "object" && !Array.isArray(value));
+    });
+  }
+
+  function normalizeProfileCharacterSlotId(value, player) {
+    const requested = PROFILE_CHARACTER_SLOT_IDS.includes(String(value || "").trim()) ? String(value || "").trim() : "id_1";
+    const ids = getProfileCharacterSlotIds(player);
+    if (!ids.length) return "id_1";
+    if (ids.includes(requested)) return requested;
+    return ids.includes("id_1") ? "id_1" : ids[0];
+  }
+
+  function getProfileCharacterSlotName(player, id) {
+    const core = window.VelarionProfileCore;
+    if (core && typeof core.getCharacterSlotName === "function") {
+      return core.getCharacterSlotName(player, id);
+    }
+    const fallbackNames = {
+      id_1: "Personagem Principal",
+      id_2: "Personagem Secundário",
+      id_3: "Personagem Alternativo 1",
+      id_4: "Personagem Alternativo 2"
+    };
+    const raw = player?.theme?.card_embed?.character_slots;
+    const slot = raw && typeof raw === "object" && !Array.isArray(raw) ? raw[id] : null;
+    const configured = slot && typeof slot === "object" && !Array.isArray(slot)
+      ? String(slot.name_slot || "").trim()
+      : (id === "id_1" ? String(player?.theme?.card_embed?.name_slot || "").trim() : "");
+    return configured || fallbackNames[id] || id;
+  }
+
+  function renderProfileCharacterSlotSelector(player, ctx) {
+    const ids = getProfileCharacterSlotIds(player);
+    const active = normalizeProfileCharacterSlotId(ctx?.characterSlotId, player);
+    const activeName = getProfileCharacterSlotName(player, active);
+    const hasAlternatives = ids.length > 1;
+    const buttons = hasAlternatives ? ids.map((id) => {
+      const index = PROFILE_CHARACTER_SLOT_IDS.indexOf(id) + 1;
+      const selected = id === active;
+      const name = getProfileCharacterSlotName(player, id);
+      return `<button class="vl-profile-character-slot${selected ? " is-active" : ""}" type="button" data-vl-character-slot="${id}" aria-pressed="${selected ? "true" : "false"}" aria-label="Exibir ${escapeHtml(name)}"><span>${String(index).padStart(2, "0")}</span><small title="${escapeHtml(name)}">${escapeHtml(name)}</small></button>`;
+    }).join("") : "";
+    return `<div class="vl-profile-character-slots${hasAlternatives ? " has-alternatives" : " is-single"}" data-vl-character-slots aria-label="Versões do personagem"><div class="vl-profile-character-slots__label"><span>VERSÃO DO PERSONAGEM</span><small>${escapeHtml(activeName)}</small></div>${hasAlternatives ? `<div class="vl-profile-character-slots__buttons">${buttons}</div>` : ""}</div>`;
+  }
+
   function renderOfficialProfileCard(player, ctx, displayNamePlain) {
     const renderer = window.VelarionLumenCard; // renderer oficial externo; não duplicar aqui
     if (renderer && typeof renderer.renderPlayerCard === "function") {
       try {
-        const html = renderer.renderPlayerCard(player, 0, buildProfileCardContext(ctx));
+        const html = renderer.renderPlayerCard(player, 0, buildProfileCardContext(ctx), { characterSlotId: ctx?.characterSlotId || "id_1" });
         if (html) {
           setTimeout(function() {
             const profileCardPort = document.querySelector(".vl-profile-card-port");
@@ -1317,8 +1440,11 @@
     const currentPage = pages[normalized];
     const label = currentPage?.dataset.pageLabel || `Página ${normalized + 1}`;
 
+    const counterText = `${String(normalized + 1).padStart(2, "0")} / ${String(total).padStart(2, "0")}`;
     const counter = showcase.querySelector(".vl-profile-showcase__counter");
-    if (counter) counter.textContent = `${String(normalized + 1).padStart(2, "0")} / ${String(total).padStart(2, "0")}`;
+    if (counter) counter.textContent = counterText;
+    const contextCounter = showcase.querySelector(".vl-profile-page-context__view-counter");
+    if (contextCounter) contextCounter.textContent = counterText;
 
     const live = showcase.querySelector(".vl-profile-showcase__live");
     if (live) live.textContent = `${label}. Página ${normalized + 1} de ${total}.`;
@@ -1414,6 +1540,19 @@
     });
   }
 
+  let profileCharacterSlotNavigationReady = false;
+  function ensureProfileCharacterSlotNavigation() {
+    if (profileCharacterSlotNavigationReady) return;
+    profileCharacterSlotNavigationReady = true;
+    document.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-vl-character-slot]");
+      if (!button) return;
+      event.preventDefault();
+      const slotId = String(button.dataset.vlCharacterSlot || "id_1");
+      document.dispatchEvent(new CustomEvent("velarion:character-slot-change", { detail: { characterSlotId: slotId } }));
+    });
+  }
+
   function render(player, ctx) {
     const context = ctx || {};
     const C = window.VelarionProfileCore;
@@ -1441,9 +1580,13 @@
     const documentHtml = documentRenderer.render(player, context);
     const progressionHtml = progressionRenderer.render(player, context);
     const publicRecordHtml = publicRecordRenderer.render(player, context);
+    const characterSlotIds = getProfileCharacterSlotIds(player);
+    const hasCharacterSlotAlternatives = characterSlotIds.length > 1;
+    const characterSlotSelectorHtml = renderProfileCharacterSlotSelector(player, context);
 
     scheduleProfileComponentRefresh();
     ensureProfileShowcaseNavigation();
+    ensureProfileCharacterSlotNavigation();
     hydrateWebsiteSocialPanel(player, context, h);
     ensureAchievementMedalInteraction();
     prepareAchievementMedalCards();
@@ -1452,11 +1595,18 @@
       <div class="detail-stage vl-profile-stage" style="--vp-accent:${color};">
         <div class="vl-profile-orbit" aria-hidden="true"></div>
         <div class="vl-profile-showcase" data-vl-profile-showcase data-page-index="0" data-direction="none">
-          <button class="vl-profile-showcase__nav vl-profile-showcase__nav--prev" type="button" data-vl-profile-nav="-1" aria-label="Página anterior">
-            <span aria-hidden="true">‹</span>
-          </button>
-
-          <nav class="vl-luminous-categories" aria-label="Categorias do perfil">
+          <header class="vl-profile-page-context" aria-label="Contexto do perfil">
+            <div class="vl-profile-page-context__copy">
+              <span class="vl-profile-page-context__eyebrow">PERFIL DO JOGADOR</span>
+              <strong class="vl-profile-page-context__name">${escapeHtml(displayNamePlain)}</strong>
+              <small class="vl-profile-page-context__meta">${escapeHtml(String(player?.id || player?.player_id || player?.profile_id || "Perfil público"))} · Perfil público</small>
+            </div>
+            <div class="vl-profile-page-context__right">
+              <div class="vl-profile-page-context__view" aria-hidden="true">
+                <span>VIEW</span>
+                <b class="vl-profile-page-context__view-counter">01 / 04</b>
+              </div>
+              <nav class="vl-luminous-categories" aria-label="Categorias do perfil">
             <div class="vl-luminous-categories__emblem" aria-hidden="true">
               <span></span>
             </div>
@@ -1499,13 +1649,26 @@
 
             <span class="vl-luminous-categories__ornament" aria-hidden="true"></span>
           </nav>
+            </div>
+          </header>
+
+          <button class="vl-profile-showcase__nav vl-profile-showcase__nav--prev" type="button" data-vl-profile-nav="-1" aria-label="Página anterior">
+            <span aria-hidden="true">‹</span>
+          </button>
+
+
 
           <div class="vl-profile-showcase__viewport">
             <article class="vl-profile-showcase__page vl-profile-showcase__page--main is-active" data-page="main" data-page-label="Identidade" aria-hidden="false">
               <div class="vl-profile-layout">
-                <aside class="vl-profile-identity vl-profile-identity--official-card">
-                  ${renderOfficialProfileCard(player, context, displayNamePlain)}
+                <aside class="vl-profile-identity vl-profile-identity--official-card${hasCharacterSlotAlternatives ? " has-character-slots" : " single-character-slot"}">
+                  <div class="vl-profile-component-zone vl-profile-component-zone--card">
+                    ${renderOfficialProfileCard(player, context, displayNamePlain)}
+                  </div>
+                  ${characterSlotSelectorHtml}
                 </aside>
+
+                <span class="vl-profile-layout-divider" aria-hidden="true"></span>
 
                 <section class="vl-profile-content vl-profile-content--dossier" aria-label="Informações completas do perfil">
                   <section class="vl-profile-panel vl-profile-panel--overview vl-profile-panel--record" style="order:${orderOverview}">
@@ -1523,13 +1686,8 @@
               </div>
             </article>
 
-            <article class="vl-profile-showcase__page vl-profile-showcase__page--systems" data-page="systems" data-page-label="Registro Público" aria-hidden="true" inert>
-              <section class="vl-profile-content vl-profile-content--dossier vl-profile-showcase__page-content" aria-label="Registro Público">
-                <section class="vl-profile-panel vl-profile-panel--systems-v2 vl-profile-panel--systems-stars-only" style="order:${orderSystems}">
-                  <div class="vl-profile-section-head vl-profile-section-head--public"><span>Registro Público</span><i></i></div>
-                  ${publicRecordHtml}
-                </section>
-              </section>
+            <article class="vl-profile-showcase__page vl-profile-showcase__page--systems vl-profile-showcase__page--systems-free" data-page="systems" data-page-label="Registro Público" aria-hidden="true" inert>
+              ${publicRecordHtml}
             </article>
 
             <article class="vl-profile-showcase__page vl-profile-showcase__page--clan vl-profile-showcase__page--social" data-page="clan" data-page-label="Conexões" aria-hidden="true" inert>

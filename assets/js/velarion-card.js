@@ -10,6 +10,7 @@
 
   const S = window.VelarionShared || {};
   const PREVIEW_MODE = false;
+  const BUILD_VERSION = "20.62-character-slot-id-preservation";
 
   function getCurrentScriptUrl() {
     const script = document.currentScript || document.querySelector('script[src*="velarion-card.js"]');
@@ -35,6 +36,13 @@
   let nickname_colors = {};
   let clanPlayers = {};
   let profilePlayers = {};
+  let character_media_layout = {};
+
+  const CHARACTER_MEDIA_LAYOUT_FIREBASE_URL =
+    "https://kazimuhwaribedrock-extensions-default-rtdb.firebaseio.com/website_panel/character_media_layout.json";
+
+  let characterMediaLayoutFirebaseLoaded = false;
+  let characterMediaLayoutFirebasePromise = null;
 
   function asObject(value) {
     return value && typeof value === "object" ? value : {};
@@ -43,6 +51,7 @@
   function setData(data) {
     const source = asObject(data);
     const extensions = asObject(source.extensionsData || source.extensions || source.information_panel);
+    const website_panel = asObject(source.website_panel || extensions.website_panel);
 
     badges_verified = asObject(source.badges_verified || extensions.badges_verified || badges_verified);
     badges_levelranks = asObject(source.badges_levelranks || extensions.badges_levelranks || badges_levelranks);
@@ -67,6 +76,12 @@
     );
     clanPlayers = asObject(source.clanPlayers || source.clansData || source.clans || clanPlayers);
     profilePlayers = asObject(source.profilePlayers || source.playersData || profilePlayers);
+    character_media_layout = asObject(
+      source.character_media_layout ||
+      website_panel.character_media_layout ||
+      extensions.character_media_layout ||
+      character_media_layout
+    );
   }
 
     const escapeHTML = S.escapeHtml;
@@ -81,13 +96,392 @@
       return getCleanText(value.url || value.src || value.image || value.path || "");
     }
 
+    // IDs conhecidos continuam exportados por compatibilidade, mas o renderer
+    // não compacta nem renumera character_slots. Qualquer id_N válido é tratado
+    // pelo seu identificador literal (id_1, id_2, id_3, ...).
+    const CHARACTER_SLOT_IDS = ["id_1", "id_2", "id_3", "id_4"];
+    const characterSlotSelectionByPlayer = new Map();
+
+    function normalizeCharacterSlotId(value, fallback = "") {
+      const raw = getCleanText(value).toLowerCase();
+      return /^id_[1-9]\d*$/.test(raw) ? raw : fallback;
+    }
+
+    function compareCharacterSlotIds(a, b) {
+      const ai = Number(String(a).replace(/^id_/i, ""));
+      const bi = Number(String(b).replace(/^id_/i, ""));
+      return ai - bi;
+    }
+
+    function collectCharacterSlots(cardEmbed) {
+      const embed = cardEmbed && typeof cardEmbed === "object" && !Array.isArray(cardEmbed) ? cardEmbed : {};
+      const raw = embed.character_slots;
+
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+        return { embed, raw: null, slots: { id_1: embed }, ids: ["id_1"], legacy: true };
+      }
+
+      const slots = {};
+      Object.keys(raw).forEach((key) => {
+        const id = normalizeCharacterSlotId(key);
+        const value = raw[key];
+        if (!id || !value || value === false || typeof value !== "object" || Array.isArray(value)) return;
+        slots[id] = value;
+      });
+
+      const ids = Object.keys(slots).sort(compareCharacterSlotIds);
+      return { embed, raw, slots, ids, legacy: false };
+    }
+
+    function resolveCharacterSlot(cardEmbed, requestedId = "") {
+      const collected = collectCharacterSlots(cardEmbed);
+      if (collected.legacy) {
+        return { id: "id_1", data: collected.embed, ids: ["id_1"], legacy: true, missing: false };
+      }
+
+      const { slots, ids } = collected;
+      const explicitRequested = normalizeCharacterSlotId(requestedId);
+
+      // Regra principal: se uma versão pediu id_N, nunca substitui silenciosamente
+      // por id_1 ou pelo primeiro slot disponível. Isso evita trocar a personagem
+      // errada quando existem lacunas como id_1 + id_3, ou quando o DOM é recriado.
+      if (explicitRequested) {
+        if (Object.prototype.hasOwnProperty.call(slots, explicitRequested)) {
+          return { id: explicitRequested, data: slots[explicitRequested], ids, legacy: false, missing: false };
+        }
+        return { id: explicitRequested, data: {}, ids, legacy: false, missing: true };
+      }
+
+      if (!ids.length) return { id: "", data: {}, ids: [], legacy: false, missing: true };
+
+      // Somente a renderização inicial sem versão explícita pode escolher um padrão.
+      const id = Object.prototype.hasOwnProperty.call(slots, "id_1") ? "id_1" : ids[0];
+      return { id, data: slots[id], ids, legacy: false, missing: false };
+    }
+
+    function rememberCharacterSlotSelection(playerId, characterSlotId) {
+      const playerKey = getCleanText(playerId);
+      const slotId = normalizeCharacterSlotId(characterSlotId);
+      if (!playerKey || !slotId) return "";
+      characterSlotSelectionByPlayer.set(playerKey, slotId);
+      return slotId;
+    }
+
+    function getCharacterSlotSelection(playerId) {
+      const playerKey = getCleanText(playerId);
+      if (!playerKey) return "";
+
+      // O DOM atual vence o cache. Isso cobre seletores externos que apenas
+      // alteram data-character-slot-id antes de recriar o card, mesmo sem evento.
+      const renderedCards = document.querySelectorAll?.(".vl-card[data-player-id][data-character-slot-id]") || [];
+      for (const card of renderedCards) {
+        if (getCleanText(card.dataset.playerId) !== playerKey) continue;
+        const renderedSlotId = normalizeCharacterSlotId(card.dataset.characterSlotId);
+        if (renderedSlotId) {
+          characterSlotSelectionByPlayer.set(playerKey, renderedSlotId);
+          return renderedSlotId;
+        }
+      }
+
+      return characterSlotSelectionByPlayer.get(playerKey) || "";
+    }
+
+    function slotValue(slotData, cardEmbed, key) {
+      if (slotData && Object.prototype.hasOwnProperty.call(slotData, key)) return slotData[key];
+      return cardEmbed?.[key];
+    }
+
     function isWebMMedia(value) {
       const source = getMediaSource(value);
       if (!source) return false;
       return /^data:video\/webm(?:;|,)/i.test(source) || /\.webm(?:$|[?#])/i.test(source);
     }
 
-    function renderCharacterMedia(source, locked = false) {
+    function normalizeCharacterCssLength(value) {
+      if (value === null || value === undefined || value === "") return "";
+      const raw = typeof value === "number" ? `${value}px` : getCleanText(value);
+      return /^-?(?:\d+(?:\.\d+)?|\.\d+)(?:px|%|rem|em|vw|vh|vmin|vmax)?$/i.test(raw)
+        ? raw
+        : "";
+    }
+
+    function normalizeCharacterScale(value) {
+      if (value === null || value === undefined || value === "") return null;
+      const number = Number(value);
+      if (!Number.isFinite(number)) return null;
+      return Math.min(5, Math.max(0.1, number));
+    }
+
+    function normalizeCharacterMediaModeLayout(value) {
+      if (value === false) return {};
+      const config = asObject(value);
+      if (config.enabled === false) return {};
+
+      const size = normalizeCharacterCssLength(config.size);
+      const width = normalizeCharacterCssLength(config.width) || size;
+      const height = normalizeCharacterCssLength(config.height) || size;
+      const left = normalizeCharacterCssLength(config.left);
+      const bottom = normalizeCharacterCssLength(config.bottom);
+      const translateX = normalizeCharacterCssLength(config.translate_x ?? config.translateX);
+      const translateY = normalizeCharacterCssLength(config.translate_y ?? config.translateY);
+      const scale = normalizeCharacterScale(config.scale);
+
+      return {
+        width,
+        height,
+        left,
+        bottom,
+        translateX,
+        translateY,
+        scale
+      };
+    }
+
+    function getCharacterMediaLayoutFallbackEntry() {
+      const entry = getFallbackEntry("character_media_layout");
+      return entry && typeof entry === "object" && !Array.isArray(entry) ? entry : {};
+    }
+
+    function resolveCharacterMediaLayoutFallback(value) {
+      const entry = getCharacterMediaLayoutFallbackEntry();
+
+      // O fallback inteiro pode ser desligado.
+      if (entry.enabled === false) {
+        return { image: false, video: false };
+      }
+
+      const website = entry.website && typeof entry.website === "object" && !Array.isArray(entry.website)
+        ? entry.website
+        : {};
+
+      // Compatibilidade: se algum ID_N antigo ainda guardar diretamente
+      // { image, video }, aceita sem quebrar.
+      if (value && typeof value === "object" && !Array.isArray(value)) {
+        if (Object.prototype.hasOwnProperty.call(value, "image") ||
+            Object.prototype.hasOwnProperty.call(value, "video")) {
+          return value;
+        }
+
+        // Compatibilidade com o schema antigo completo.
+        const legacyCharacter = value?.velarion_card_sync?.character_image;
+        if (legacyCharacter && typeof legacyCharacter === "object") {
+          const legacyDefault = legacyCharacter.default;
+          if (legacyDefault && typeof legacyDefault === "object") {
+            return legacyDefault;
+          }
+        }
+      }
+
+      const raw = getCleanText(value);
+      const match = /^fallbacks_id_(.+)$/i.exec(raw);
+      const key = match ? getCleanText(match[1]) : "";
+
+      // Mesmo princípio do fallback de Character Image:
+      // chave pedida -> default -> undefined -> missing.
+      const candidates = [];
+
+      if (key) {
+        candidates.push(
+          website[key],
+          website[`fallbacks_id_${key}`]
+        );
+      }
+
+      candidates.push(
+        website.default,
+        website.undefined,
+        website.missing
+      );
+
+      for (const candidate of candidates) {
+        if (candidate === false) {
+          return { image: false, video: false };
+        }
+
+        if (candidate && typeof candidate === "object" && !Array.isArray(candidate)) {
+          return candidate;
+        }
+      }
+
+      // Nenhuma definição encontrada: CSS/renderer original assume.
+      return { image: false, video: false };
+    }
+
+    function getCharacterMediaLayout(playerId, characterSlotId = "id_1") {
+      const playerKey = getCleanText(playerId);
+      const slotKey = getCleanText(characterSlotId) || "id_1";
+      const playerRawConfig = character_media_layout?.[playerKey];
+
+      // Compatibilidade opcional:
+      // se o ID_N inteiro ainda for "fallbacks_id_X", resolve o fallback
+      // como layout direto para o slot solicitado.
+      if (typeof playerRawConfig === "string") {
+        const resolvedPlayerFallback = resolveCharacterMediaLayoutFallback(playerRawConfig);
+        return {
+          image: resolvedPlayerFallback?.image === false ? false : asObject(resolvedPlayerFallback?.image),
+          video: resolvedPlayerFallback?.video === false ? false : asObject(resolvedPlayerFallback?.video)
+        };
+      }
+
+      if (playerRawConfig === false) {
+        return { image: false, video: false };
+      }
+
+      const playerConfig = asObject(playerRawConfig);
+      const syncConfig = asObject(playerConfig.velarion_card_sync);
+      const characterConfig = asObject(syncConfig.character_image);
+      const defaultConfig = asObject(characterConfig.default);
+      const slots = asObject(characterConfig.slots);
+
+      const rawSlotConfig = slots[slotKey];
+
+      // false = sem override manual neste slot.
+      if (rawSlotConfig === false || rawSlotConfig === null || rawSlotConfig === undefined) {
+        return { image: false, video: false };
+      }
+
+      // NOVO:
+      // "id_2": "fallbacks_id_female"
+      // resolve diretamente para:
+      // badges_fallbacks.character_media_layout.website.female
+      if (typeof rawSlotConfig === "string") {
+        const resolvedSlotFallback = resolveCharacterMediaLayoutFallback(rawSlotConfig);
+
+        if (!resolvedSlotFallback) {
+          return { image: false, video: false };
+        }
+
+        return {
+          image: resolvedSlotFallback?.image === false ? false : asObject(resolvedSlotFallback?.image),
+          video: resolvedSlotFallback?.video === false ? false : asObject(resolvedSlotFallback?.video)
+        };
+      }
+
+      // Objeto normal do slot: mantém o comportamento existente.
+      const slotConfig = asObject(rawSlotConfig);
+
+      function resolveMode(mode) {
+        // false em image/video desativa somente o override daquele modo.
+        if (slotConfig[mode] === false) return false;
+
+        return {
+          ...asObject(defaultConfig[mode]),
+          ...asObject(characterConfig[mode]),
+          ...asObject(slotConfig[mode])
+        };
+      }
+
+      return {
+        image: resolveMode("image"),
+        video: resolveMode("video")
+      };
+    }
+
+    function applyCharacterMediaLayoutToElement(element, playerId, characterSlotId) {
+      if (!element) return;
+
+      const layout = getCharacterMediaLayout(playerId, characterSlotId);
+      const isVideo = element.tagName === "VIDEO" || element.classList.contains("vl-card__character--webm");
+      const rawModeLayout = isVideo ? layout.video : layout.image;
+
+      const variableNames = [
+        "--character-media-width",
+        "--character-media-height",
+        "--character-media-left",
+        "--character-media-bottom",
+        "--character-media-translate-x",
+        "--character-media-translate-y",
+        "--character-media-scale"
+      ];
+
+      // false = remove todos os overrides e deixa o CSS original assumir.
+      if (rawModeLayout === false) {
+        variableNames.forEach((name) => element.style.removeProperty(name));
+        return;
+      }
+
+      const modeLayout = normalizeCharacterMediaModeLayout(rawModeLayout);
+      const values = {
+        "--character-media-width": modeLayout.width,
+        "--character-media-height": modeLayout.height,
+        "--character-media-left": modeLayout.left,
+        "--character-media-bottom": modeLayout.bottom,
+        "--character-media-translate-x": modeLayout.translateX,
+        "--character-media-translate-y": modeLayout.translateY,
+        "--character-media-scale": modeLayout.scale
+      };
+
+      variableNames.forEach((name) => {
+        const value = values[name];
+        if (value === null || value === undefined || value === "") {
+          element.style.removeProperty(name);
+        } else {
+          element.style.setProperty(name, String(value));
+        }
+      });
+    }
+
+    function applyCharacterMediaLayoutToRenderedCards(root = document) {
+      root.querySelectorAll?.(".vl-card[data-player-id][data-character-slot-id]").forEach((card) => {
+        const playerId = getCleanText(card.dataset.playerId);
+        const characterSlotId = getCleanText(card.dataset.characterSlotId) || "id_1";
+        const media = card.querySelector(".vl-card__character");
+        applyCharacterMediaLayoutToElement(media, playerId, characterSlotId);
+      });
+    }
+
+    async function loadCharacterMediaLayoutFromFirebase(force = false) {
+      if (characterMediaLayoutFirebaseLoaded && !force) return character_media_layout;
+      if (characterMediaLayoutFirebasePromise && !force) return characterMediaLayoutFirebasePromise;
+
+      characterMediaLayoutFirebasePromise = fetch(CHARACTER_MEDIA_LAYOUT_FIREBASE_URL, {
+        method: "GET",
+        cache: "no-store",
+        headers: { "Accept": "application/json" }
+      })
+        .then(async (response) => {
+          if (!response.ok) {
+            throw new Error(`Firebase character_media_layout HTTP ${response.status}`);
+          }
+
+          const data = await response.json();
+          character_media_layout = asObject(data);
+          characterMediaLayoutFirebaseLoaded = true;
+          applyCharacterMediaLayoutToRenderedCards(document);
+
+          window.dispatchEvent(new CustomEvent("velarion:character-media-layout-loaded", {
+            detail: { source: "firebase", count: Object.keys(character_media_layout).length }
+          }));
+
+          return character_media_layout;
+        })
+        .catch((error) => {
+          console.warn("[VelarionCard] Falha ao carregar character_media_layout do Firebase:", error);
+          return character_media_layout;
+        })
+        .finally(() => {
+          characterMediaLayoutFirebasePromise = null;
+        });
+
+      return characterMediaLayoutFirebasePromise;
+    }
+
+    function buildCharacterMediaStyle(layout) {
+      const config = asObject(layout);
+      const declarations = [];
+
+      if (config.width) declarations.push(`--character-media-width:${config.width}`);
+      if (config.height) declarations.push(`--character-media-height:${config.height}`);
+      if (config.left) declarations.push(`--character-media-left:${config.left}`);
+      if (config.bottom) declarations.push(`--character-media-bottom:${config.bottom}`);
+      if (config.translateX) declarations.push(`--character-media-translate-x:${config.translateX}`);
+      if (config.translateY) declarations.push(`--character-media-translate-y:${config.translateY}`);
+      if (config.scale !== null && config.scale !== undefined) declarations.push(`--character-media-scale:${config.scale}`);
+
+      return declarations.join(";");
+    }
+
+    function renderCharacterMedia(source, locked = false, mediaLayout = {}) {
       const media = getMediaSource(source);
       if (!media) return "";
 
@@ -95,14 +489,18 @@
         ? "vl-card__character vl-card__character--locked"
         : "vl-card__character";
 
-      if (isWebMMedia(media)) {
-        /* WebM costuma ter uma área transparente maior que a arte equivalente
-           em PNG/GIF. Aplica um zoom leve somente ao vídeo, mantendo a base
-           do personagem ancorada e sem alterar as versões de imagem. */
-        return `<video class="${className} vl-card__character--webm" src="${escapeHTML(media)}" autoplay loop muted playsinline preload="auto" aria-hidden="true" tabindex="-1" style="background:transparent;object-position:center bottom;left:50%;right:auto;transform:translate(-50%, 7.5%) scale(1.18);transform-origin:50% 100%;max-width:none;" onerror="this.remove();"></video>`;
+      const isVideo = isWebMMedia(media);
+      const modeLayout = normalizeCharacterMediaModeLayout(
+        isVideo ? mediaLayout.video : mediaLayout.image
+      );
+      const customStyle = buildCharacterMediaStyle(modeLayout);
+      const styleAttr = customStyle ? ` style="${escapeHTML(customStyle)}"` : "";
+
+      if (isVideo) {
+        return `<video class="${className} vl-card__character--webm" src="${escapeHTML(media)}" autoplay loop muted playsinline preload="auto" aria-hidden="true" tabindex="-1"${styleAttr} onerror="this.remove();"></video>`;
       }
 
-      return `<img class="${className}" src="${escapeHTML(media)}" alt="" loading="eager">`;
+      return `<img class="${className}" src="${escapeHTML(media)}" alt="" loading="eager"${styleAttr}>`;
     }
 
 
@@ -128,7 +526,10 @@
         cycle: "rotate",
         cycling: "rotate",
         smooth: "pulse",
-        spectrum: "rainbow"
+      spectrum: "rainbow",
+      rgb: "rainbow",
+      colours: "rainbow",
+      colors: "rainbow"
       };
 
       const normalized = aliases[raw] || raw || "none";
@@ -183,7 +584,7 @@
         .filter(Boolean)
         .sort((a, b) => a.index - b.index);
 
-      const colors = indexedColors.map((entry) => entry.color);
+      let colors = indexedColors.map((entry) => entry.color);
 
       /* Pequena tolerância para configurações incompletas/migrações. */
       if (!colors.length) {
@@ -199,7 +600,11 @@
       }
 
       const type = normalizeCardColorType(value.cc_type);
-      const speed = normalizeCardColorSpeed(value.cc_speed, 10);
+
+      /* gradient é estritamente binário: usa apenas cc_id1 e cc_id2.
+         cc_speed não pertence a esse modo porque o gradiente é estático. */
+      if (type === "gradient") colors = colors.slice(0, 2);
+      const speed = type === "gradient" ? null : normalizeCardColorSpeed(value.cc_speed, 10);
 
       return {
         legacy: false,
@@ -208,6 +613,22 @@
         type,
         speed
       };
+    }
+
+    function buildRainbowGradient(angle = "90deg", loop = false) {
+      const stops = [
+        "#ff304f 0%",
+        "#ff8a2a 16.66%",
+        "#ffe45b 33.33%",
+        "#45e88a 50%",
+        "#38a8ff 66.66%",
+        "#7d5cff 83.33%",
+        "#ff3fc8 100%"
+      ];
+      if (loop) {
+        return `linear-gradient(${angle}, ${stops.join(", ")}, #ff304f 116.66%)`;
+      }
+      return `linear-gradient(${angle}, ${stops.join(", ")})`;
     }
 
     function buildCardPaletteGradient(colors, angle = "135deg") {
@@ -328,8 +749,19 @@
     function getFallbackMedia(kind, key = "default") {
       const entry = getFallbackEntry(kind);
       const website = entry?.website && typeof entry.website === "object" ? entry.website : {};
-      const value = website[key] || website.default || website.undefined || website.missing || badges_fallbacks?.defaults?.[kind];
+      const cleanKey = getCleanText(key).replace(/^fallbacks_id_/i, "") || "default";
+      const value = website[cleanKey] || website.default || website.undefined || website.missing || badges_fallbacks?.defaults?.[kind];
       return getCleanText(value);
+    }
+
+    function resolveFallbackMediaValue(kind, value, fallbackKey = "default") {
+      const raw = getMediaSource(value);
+      if (!raw) return getFallbackMedia(kind, fallbackKey);
+
+      const match = /^fallbacks_id_(.+)$/i.exec(raw);
+      if (!match) return raw;
+
+      return getFallbackMedia(kind, match[1]) || getFallbackMedia(kind, fallbackKey);
     }
 
     function getNicknameFallbackColor() {
@@ -380,6 +812,18 @@
 
     function getRarityKeyFromId(id) {
       return toDataToken(getCleanText(id).replace(/^raritys?_id_/i, ""), "none");
+    }
+
+    function getRarityFamilyFromKey(key) {
+      const raw = toDataToken(key, "none");
+      return raw.replace(/_(?:minus|plus)$/i, "") || "none";
+    }
+
+    function getRarityVariantFromKey(key) {
+      const raw = toDataToken(key, "none");
+      if (/_minus$/i.test(raw)) return "minus";
+      if (/_plus$/i.test(raw)) return "plus";
+      return "base";
     }
 
     function getRarityEvolution(value, fallback = "normal") {
@@ -559,9 +1003,12 @@
       const color = isValidHexColor(website.color || rarity.color) ? (website.color || rarity.color) : "#ffffff";
       const color2 = isValidHexColor(website.color2 || rarity.color2) ? (website.color2 || rarity.color2) : "color-mix(in srgb, #ffffff 26%, #fff6dc 74%)";
       const glow = isValidHexColor(website.glow || rarity.glow) ? (website.glow || rarity.glow) : color;
+      const gradient = getCleanText(website.gradient || rarity.gradient) || `linear-gradient(135deg, ${color} 0%, ${color2} 56%, ${glow} 100%)`;
       const key = getRarityKeyFromId(resolvedId || id);
+      const family = getRarityFamilyFromKey(key);
+      const variant = getRarityVariantFromKey(key);
       const frame = rarity.card_effects?.frame || website.evolution || rarity.evolution;
-      const evolution = getRarityEvolution(frame, key === "ssr" ? "summon" : "normal");
+      const evolution = getRarityEvolution(frame, family === "ssr" ? "summon" : "normal");
       const intensity = clampNumber(getNumber(rarity.card_effects?.intensity ?? website.intensity ?? rarity.intensity, 0.65), 0, 1.25);
 
       return {
@@ -570,10 +1017,13 @@
         enabled,
         label: getCleanText(rarity.label || rarity.name || website.badge_text) || "RARITY",
         key,
+        family,
+        variant,
         evolution,
         color,
         color2,
         glow,
+        gradient,
         shortLabel: getCleanText(website.short_label ?? website.shortLabel ?? website.badge_text) || "SUMMON",
         stars: getCleanText(website.stars) || (rarity.stars_count ? "★".repeat(clampNumber(getNumber(rarity.stars_count, 5), 1, 5)) : "★★★★★"),
         intensity,
@@ -740,11 +1190,34 @@
     }
 
 
+    function getRarityTypography(family) {
+      const key = getCleanText(family).toLowerCase();
+      const map = {
+        n: [29, 22], f: [29, 22], e: [30, 23], d: [30, 23],
+        c: [31, 24], b: [31, 24], a: [32, 24], s: [34, 25],
+        ss: [35, 26], sss: [36, 26], sr: [36, 27], ssr: [37, 27],
+        ur: [38, 28], lr: [38, 28], mr: [40, 29], x: [41, 29],
+        xx: [43, 30], xxx: [46, 32]
+      };
+      const [max, min] = map[key] || [52, 41];
+      return { max, min };
+    }
+
+    function getRarityPriority(family) {
+      const order = ["n", "f", "e", "d", "c", "b", "a", "s", "ss", "sss", "sr", "ssr", "ur", "lr", "mr", "x", "xx", "xxx"];
+      const index = order.indexOf(getCleanText(family).toLowerCase());
+      return index < 0 ? 0 : index + 1;
+    }
+
     function renderRarityMark(rarity) {
       if (!rarity?.enabled) return "";
 
       const label = getCleanText(rarity.label);
       const stars = getCleanText(rarity.stars) || "★★★★★";
+      const family = getCleanText(rarity.family || rarity.key || "none").toLowerCase();
+      const variant = getCleanText(rarity.variant || "base").toLowerCase();
+      const typography = getRarityTypography(family);
+      const priority = getRarityPriority(family);
 
       return `
         <div
@@ -752,13 +1225,15 @@
           title="Raridade ${escapeHTML(label)}"
           aria-label="Raridade ${escapeHTML(label)}"
           data-rarity-id="${escapeHTML(rarity.requestedId || rarity.id)}"
+          data-rarity-family="${escapeHTML(family)}"
+          data-rarity-variant="${escapeHTML(variant)}"
+          data-rarity-priority="${priority}"
         >
-          <strong class="vl-card__rarity-label" data-fit-line data-fit-max="48" data-fit-min="30">${escapeHTML(label)}</strong>
+          <strong class="vl-card__rarity-label" data-fit-line data-fit-max="${typography.max}" data-fit-min="${typography.min}">${escapeHTML(label)}</strong>
           <span class="vl-card__rarity-stars" aria-hidden="true">${escapeHTML(stars)}</span>
         </div>
       `;
     }
-
 
 
     function renderLevelRankChip(profile) {
@@ -1155,10 +1630,18 @@
     }
 
 
-    function normalizeCardProfile(id, data, position) {
+    function normalizeCardProfile(id, data, position, requestedCharacterSlotId = "") {
       const profile = data.profile ?? {};
       const status = data.status ?? {};
       const cardEmbed = data.theme?.card_embed ?? {};
+      const characterSlot = resolveCharacterSlot(cardEmbed, requestedCharacterSlotId);
+      const slotData = characterSlot.data || {};
+      const selectedSlotValue = (key) => {
+        // Em schema character_slots, um id_N explicitamente ausente não pode
+        // herdar a mídia raiz/legada e parecer outra versão do personagem.
+        if (!characterSlot.legacy && characterSlot.missing) return undefined;
+        return slotValue(slotData, cardEmbed, key);
+      };
       const securityOverlay = cardEmbed.security_overlay ?? {};
 
       const cardEnabled = getBooleanByKeys(cardEmbed, ["enabled"], true);
@@ -1214,7 +1697,7 @@
       const fallbackCardColor = isValidHexColor(levelRankWebsite.color)
         ? levelRankWebsite.color
         : "#ff84cf";
-      const cardColorConfig = normalizeCardColorConfig(cardEmbed.card_color, fallbackCardColor);
+      const cardColorConfig = normalizeCardColorConfig(selectedSlotValue("card_color"), fallbackCardColor);
       const cardColor = cardColorConfig.primary;
 
       return {
@@ -1238,18 +1721,25 @@
         rarityColor: rarity.color || "#ffffff",
         rarityColor2: rarity.color2 || "#fff6dc",
         rarityGlow: rarity.glow || "#ffffff",
+        rarityGradient: rarity.gradient || `linear-gradient(135deg, ${rarity.color || "#ffffff"} 0%, ${rarity.color2 || "#fff6dc"} 56%, ${rarity.glow || "#ffffff"} 100%)`,
         rarityIntensity: rarity.intensity || 0,
         rarityCardEffects: rarity.cardEffects || {},
-        evolutionColor: rarityEnabled ? (rarity.color || cardColor) : cardColor,
-        evolutionColor2: rarityEnabled ? (rarity.color2 || `color-mix(in srgb, ${cardColor} 34%, #ffffff 66%)`) : `color-mix(in srgb, ${cardColor} 34%, #ffffff 66%)`,
-        evolutionGlow: rarityEnabled ? (rarity.glow || cardColor) : cardColor,
+        // Card Color remains the sole source for the physical card/frame VFX.
+        // Rarity colors are intentionally isolated to the rarity mark itself.
+        evolutionColor: cardColor,
+        evolutionColor2: `color-mix(in srgb, ${cardColor} 34%, #ffffff 66%)`,
+        evolutionGlow: cardColor,
 
         cardColor,
         cardColors: cardColorConfig.colors,
         cardColorType: cardColorConfig.type,
         cardColorSpeed: cardColorConfig.speed,
-        cardPaletteGradient: buildCardPaletteGradient(cardColorConfig.colors, "135deg"),
-        cardPaletteLoopGradient: buildCardPaletteLoopGradient(cardColorConfig.colors, "90deg"),
+        cardPaletteGradient: cardColorConfig.type === "rainbow"
+          ? buildRainbowGradient("135deg", false)
+          : buildCardPaletteGradient(cardColorConfig.colors, "135deg"),
+        cardPaletteLoopGradient: cardColorConfig.type === "rainbow"
+          ? buildRainbowGradient("90deg", true)
+          : buildCardPaletteLoopGradient(cardColorConfig.colors, "90deg"),
         cardColor2: `color-mix(in srgb, ${cardColor} 34%, #ffffff 66%)`,
         cardGlow: cardColor,
         cardStrong: `color-mix(in srgb, ${cardColor} 82%, #ffffff 18%)`,
@@ -1269,9 +1759,18 @@
         online: Boolean(status.online),
 
         cardEnabled,
-        characterImage: cardEnabled ? (getMediaSource(cardEmbed.character_image) || getFallbackMedia("character", data?.profile?.gender || "default") || "") : "",
-        bannerBottomImage: cardEnabled && showBanner ? (cardEmbed.banner_bottom_image || getFallbackMedia("banner") || "") : "",
-        bannerFrameImage: cardEnabled && showBanner ? (cardEmbed.banner_frame_image || "") : "",
+        characterSlotId: characterSlot.id || normalizeCharacterSlotId(requestedCharacterSlotId, "id_1"),
+        characterSlotIds: characterSlot.ids,
+        characterSlotMissing: Boolean(characterSlot.missing),
+        characterSlotCount: characterSlot.ids.length || 1,
+        hasMultipleCharacterSlots: characterSlot.ids.length > 1,
+        backgroundColor: getCleanText(selectedSlotValue("background_color")),
+        bannerBackgroundImage: cardEnabled && showBanner ? (getMediaSource(selectedSlotValue("banner_background_image")) || "") : "",
+        characterImage: cardEnabled ? (resolveFallbackMediaValue("character", selectedSlotValue("character_image"), data?.profile?.gender || "default") || "") : "",
+        characterMediaLayout: getCharacterMediaLayout(id, characterSlot.id || "id_1"),
+        bannerBottomImage: cardEnabled && showBanner ? (getMediaSource(selectedSlotValue("banner_bottom_image")) || getFallbackMedia("banner") || "") : "",
+        bannerFrameImage: cardEnabled && showBanner ? (getMediaSource(selectedSlotValue("banner_frame_image")) || "") : "",
+        profileFrameImage: cardEnabled ? (resolveFallbackMediaValue("profile_frame", selectedSlotValue("profile_frame_image"), "default") || "") : "",
         avatarLock,
         clan,
 
@@ -1324,10 +1823,10 @@
         : renderSecretBanner(profile);
 
       const characterHTML = profile.showAvatar
-        ? renderCharacterMedia(profile.characterImage, false)
+        ? renderCharacterMedia(profile.characterImage, false, profile.characterMediaLayout)
         : `
           ${profile.characterImage
-            ? renderCharacterMedia(profile.characterImage, true)
+            ? renderCharacterMedia(profile.characterImage, true, profile.characterMediaLayout)
             : renderSecretAvatar(profile)
           }
           ${renderLockedAvatarOverlay(profile)}
@@ -1356,12 +1855,19 @@
           data-status="${status}"
           data-card-embed-enabled="${profile.cardEnabled ? "true" : "false"}"
           data-theme-enabled="${profile.cardEnabled ? "true" : "false"}"
+          data-character-slot-id="${escapeHTML(profile.characterSlotId || "id_1")}"
+          data-character-slot-count="${escapeHTML(profile.characterSlotCount || 1)}"
+          data-character-slot-ids="${escapeHTML((profile.characterSlotIds || []).join(","))}"
+          data-character-slot-missing="${profile.characterSlotMissing ? "true" : "false"}"
+          data-character-slot-multiple="${profile.hasMultipleCharacterSlots ? "true" : "false"}"
           data-card-color-type="${escapeHTML(profile.cardColorType || "none")}"
-          data-card-color-speed="${escapeHTML(profile.cardColorSpeed || 10)}"
+          ${profile.cardColorType === "gradient" ? "" : `data-card-color-speed="${escapeHTML(profile.cardColorSpeed || 10)}"`}
           data-card-color-palette="${escapeHTML((profile.cardColors || [profile.cardColor]).join(","))}"
           data-rarity-enabled="${profile.rarityEnabled ? "true" : "false"}"
           data-rarity="${escapeHTML(profile.rarityKey)}"
-          data-evolution="${escapeHTML(profile.rarityEvolution)}"
+          data-rarity-family="${escapeHTML(profile.rarity?.family || profile.rarityKey || "none")}"
+          data-rarity-variant="${escapeHTML(profile.rarity?.variant || "base")}"
+          data-rarity-visual="text-only"
           data-rarity-particles="${profile.rarityCardEffects?.particles === false ? "false" : "true"}"
           data-rarity-aura="${profile.rarityCardEffects?.aura === false ? "false" : "true"}"
           data-rarity-summon-ring="${profile.rarityCardEffects?.summon_ring === false ? "false" : "true"}"
@@ -1384,10 +1890,11 @@
           data-avatar-lock-id="${escapeHTML(profile.avatarLock?.requestedId || profile.avatarLock?.id || "warns_id_paid")}"
           data-show-banner="${profile.showBanner ? "true" : "false"}"
           style="
+            --character-slot-background: ${escapeHTML(profile.backgroundColor || "transparent")};
             --card-color: ${escapeHTML(profile.cardColor)};
             --card-color2: ${escapeHTML(profile.cardColor2)};
             --card-glow: ${escapeHTML(profile.cardGlow)};
-            --card-color-speed: ${escapeHTML(profile.cardColorSpeed || 10)}s;
+            ${profile.cardColorType === "gradient" ? "" : `--card-color-speed: ${escapeHTML(profile.cardColorSpeed || 10)}s;`}
             --card-palette-gradient: ${escapeHTML(profile.cardPaletteGradient)};
             --card-palette-loop-gradient: ${escapeHTML(profile.cardPaletteLoopGradient)};
             --accent: ${escapeHTML(profile.cardColor)};
@@ -1412,6 +1919,7 @@
             --rarity-color: ${escapeHTML(profile.rarityColor)};
             --rarity-color2: ${escapeHTML(profile.rarityColor2)};
             --rarity-glow: ${escapeHTML(profile.rarityGlow)};
+            --rarity-gradient: ${escapeHTML(profile.rarityGradient)};
             --rarity-intensity: ${escapeHTML(profile.rarityIntensity || 0)};
 
             /* Variáveis do motivo do avatar bloqueado.
@@ -1626,11 +2134,21 @@
     }
 
 
-  function renderPlayerCard(player, index, dataContext) {
+  function renderPlayerCard(player, index, dataContext, options) {
     if (dataContext) setData(dataContext);
     const data = asObject(player);
+    const opts = asObject(options);
     const id = String(data._id || data.id || data.profile_id || data.profile?.id || `ID_${Number(index || 0)}`);
-    const normalized = normalizeCardProfile(id, data, Number(index || 0) + 1);
+
+    const explicitSlotId = normalizeCharacterSlotId(opts.characterSlotId);
+    const rememberedSlotId = getCharacterSlotSelection(id);
+    const requestedSlotId = explicitSlotId || rememberedSlotId || "";
+
+    const normalized = normalizeCardProfile(id, data, Number(index || 0) + 1, requestedSlotId);
+    if (normalized.characterSlotId) {
+      rememberCharacterSlotSelection(id, normalized.characterSlotId);
+    }
+
     const cardHTML = createProfileCard(normalized);
     if (!cardHTML) return "";
     return `<div class="vl-card-slot" data-vl-card-slot><div class="vl-card-scale" data-vl-card-scale>${cardHTML}</div></div>`;
@@ -1679,12 +2197,24 @@
       const type = normalizeCardColorType(card.dataset.cardColorType);
       const colors = getCardRuntimePalette(card);
 
-      if (colors.length < 2 || !["rotate", "pulse"].includes(type)) return;
+      if ((colors.length < 2 && type !== "rainbow") || !["rotate", "pulse", "rainbow"].includes(type)) return;
 
       active = true;
 
       const speed = normalizeCardColorSpeed(card.dataset.cardColorSpeed, 10);
       const elapsedSeconds = (now - cardColorRuntime.startedAt) / 1000;
+
+      if (type === "rainbow") {
+        const rainbow = ["#ff304f", "#ff8a2a", "#ffe45b", "#45e88a", "#38a8ff", "#7d5cff", "#ff3fc8"];
+        const cycle = ((elapsedSeconds % speed) / speed) * rainbow.length;
+        const baseIndex = Math.floor(cycle) % rainbow.length;
+        const nextIndex = (baseIndex + 1) % rainbow.length;
+        const localProgress = cycle - Math.floor(cycle);
+        const eased = localProgress * localProgress * (3 - 2 * localProgress);
+        applyDynamicCardColor(card, interpolateHexColor(rainbow[baseIndex], rainbow[nextIndex], eased));
+        return;
+      }
+
       const cycle = ((elapsedSeconds % speed) / speed) * colors.length;
 
       const baseIndex = Math.floor(cycle) % colors.length;
@@ -1729,7 +2259,7 @@
         applyDynamicCardColor(card, colors[0]);
       }
 
-      if (colors.length > 1 && ["rotate", "pulse"].includes(type)) {
+      if ((colors.length > 1 || type === "rainbow") && ["rotate", "pulse", "rainbow"].includes(type)) {
         cardColorRuntime.cards.add(card);
       }
     });
@@ -1762,7 +2292,27 @@
     });
   }
 
+  // Quando o seletor externo troca a versão do personagem, memoriza o id_N
+  // literal aplicado. Assim uma recriação posterior do card não volta para id_1.
+  document.addEventListener("velarion:character-slot-applied", (event) => {
+    const target = event?.target instanceof Element ? event.target : null;
+    const card = target?.matches?.(".vl-card") ? target : target?.closest?.(".vl-card") || target?.querySelector?.(".vl-card");
+    const playerId = getCleanText(event?.detail?.playerId || card?.dataset?.playerId || "");
+    const slotId = normalizeCharacterSlotId(
+      event?.detail?.characterSlotId ||
+      event?.detail?.slotId ||
+      card?.dataset?.characterSlotId ||
+      ""
+    );
+    if (playerId && slotId) rememberCharacterSlotSelection(playerId, slotId);
+  });
+
+  // Carrega o layout remoto sem bloquear a renderização inicial.
+  // Quando terminar, os cards existentes recebem os overrides do Firebase.
+  loadCharacterMediaLayoutFromFirebase(false);
+
   window.VelarionLumenCard = {
+    version: BUILD_VERSION,
     setData,
     renderPlayerCard,
     normalizeCardProfile,
@@ -1770,6 +2320,15 @@
     hydrate,
     fitAllCardTexts,
     normalizeCardColorConfig,
+    resolveCharacterMediaLayoutFallback,
+    getCharacterMediaLayout,
+    loadCharacterMediaLayoutFromFirebase,
+    applyCharacterMediaLayoutToRenderedCards,
+    resolveCharacterSlot,
+    normalizeCharacterSlotId,
+    rememberCharacterSlotSelection,
+    getCharacterSlotSelection,
+    CHARACTER_SLOT_IDS,
     setupCardColorEffects
   };
 })(window, document);

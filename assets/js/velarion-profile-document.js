@@ -14,6 +14,56 @@
     return api;
   }
 
+
+  function normalizeCharacterSlotId(value, fallback = "") {
+    const raw = core().cleanValue(value).toLowerCase();
+    return /^id_[1-9]\d*$/.test(raw) ? raw : fallback;
+  }
+
+  function compareCharacterSlotIds(a, b) {
+    const ai = Number(String(a).replace(/^id_/i, ""));
+    const bi = Number(String(b).replace(/^id_/i, ""));
+    return ai - bi;
+  }
+
+  function getPlayerKey(player) {
+    const C = core();
+    return C.cleanValue(player?._id || player?.id || player?.profile_id || player?.profile?.id || "");
+  }
+
+  function resolveDocumentCharacterSlot(player, requestedId = "") {
+    const embed = player?.theme?.card_embed && typeof player.theme.card_embed === "object" && !Array.isArray(player.theme.card_embed)
+      ? player.theme.card_embed
+      : {};
+    const raw = embed.character_slots;
+
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      return { id: "id_1", data: embed, ids: ["id_1"], legacy: true, missing: false };
+    }
+
+    const slots = {};
+    Object.keys(raw).forEach((key) => {
+      const id = normalizeCharacterSlotId(key);
+      const value = raw[key];
+      if (!id || !value || value === false || typeof value !== "object" || Array.isArray(value)) return;
+      slots[id] = value;
+    });
+
+    const ids = Object.keys(slots).sort(compareCharacterSlotIds);
+    const explicitRequested = normalizeCharacterSlotId(requestedId);
+
+    if (explicitRequested) {
+      if (Object.prototype.hasOwnProperty.call(slots, explicitRequested)) {
+        return { id: explicitRequested, data: slots[explicitRequested], ids, legacy: false, missing: false };
+      }
+      return { id: explicitRequested, data: {}, ids, legacy: false, missing: true };
+    }
+
+    if (!ids.length) return { id: "", data: {}, ids: [], legacy: false, missing: true };
+    const id = Object.prototype.hasOwnProperty.call(slots, "id_1") ? "id_1" : ids[0];
+    return { id, data: slots[id], ids, legacy: false, missing: false };
+  }
+
   function getClanNameFallback(player) {
     const C = core();
     return C.stripMinecraftCodes(player?.clan?.name || player?.clan?.tag || player?.profile?.clan || "Sem clã");
@@ -268,6 +318,18 @@
     return `<img src="${C.escapeHtml(media)}" alt="" loading="lazy" referrerpolicy="no-referrer" crossorigin="anonymous" onerror="this.parentElement.remove();">`;
   }
 
+  function resolveFallbackMediaValue(ctx, kind, value, fallbackKey = "default") {
+    const C = core();
+    const raw = C.getMediaSource(value);
+    if (!raw) return C.getMediaSource(C.getFallbackMedia(ctx, kind, "", fallbackKey));
+
+    const match = /^fallbacks_id_(.+)$/i.exec(C.cleanValue(raw));
+    if (!match) return raw;
+
+    return C.getMediaSource(C.getFallbackMedia(ctx, kind, "", match[1])) ||
+      C.getMediaSource(C.getFallbackMedia(ctx, kind, "", fallbackKey));
+  }
+
   function render(player, context) {
     const C = core();
     const ctx = context || {};
@@ -281,10 +343,35 @@
     const verifiedBadgeSourceHtml = buildVerifiedCardBadgeHtml(player);
     const verifiedBadgeHtml = useVerifiedCompactIcon(player, ctx, verifiedBadgeSourceHtml);
     const verifiedInfoHtml = buildVerifiedInfoPopover(player, ctx, verifiedBadgeSourceHtml);
-    const cardColorConfig = C.normalizeCardColorConfig(player?.theme?.card_embed?.card_color, player?.theme?.profile?.accent || "#8b6cff");
+    const playerKey = getPlayerKey(player);
+    const cardApi = window.VelarionLumenCard;
+    const explicitCharacterSlotId = normalizeCharacterSlotId(ctx.characterSlotId);
+    const rememberedCharacterSlotId = !explicitCharacterSlotId && cardApi && typeof cardApi.getCharacterSlotSelection === "function"
+      ? normalizeCharacterSlotId(cardApi.getCharacterSlotSelection(playerKey))
+      : "";
+    const requestedCharacterSlotId = explicitCharacterSlotId || rememberedCharacterSlotId || "";
+    const characterSlot = resolveDocumentCharacterSlot(player, requestedCharacterSlotId);
+    const slotData = characterSlot.data || {};
+    const selectedSlotValue = (key) => {
+      if (!characterSlot.legacy && characterSlot.missing) return undefined;
+      return Object.prototype.hasOwnProperty.call(slotData, key) ? slotData[key] : player?.theme?.card_embed?.[key];
+    };
+
+    if (playerKey && characterSlot.id && cardApi && typeof cardApi.rememberCharacterSlotSelection === "function") {
+      cardApi.rememberCharacterSlotSelection(playerKey, characterSlot.id);
+    }
+    const cardColorConfig = C.normalizeCardColorConfig(
+      selectedSlotValue("card_color"),
+      player?.theme?.profile?.accent || "#8b6cff"
+    );
     const primaryCardColor = cardColorConfig.primary;
     const avatar = getAvatar(player) || DEFAULT_AVATAR;
-    const profileFrameImage = C.getMediaSource(player?.theme?.card_embed?.profile_frame_image);
+    const profileFrameImage = resolveFallbackMediaValue(
+      ctx,
+      "profile_frame",
+      selectedSlotValue("profile_frame_image"),
+      "default"
+    );
     const displayNamePlain = C.stripMinecraftCodes(getDisplayName(player)) || "Jogador";
     const username = getUsername(player) || displayNamePlain;
     const cardTitle = getCardTitle(player);
@@ -296,8 +383,12 @@
     const playerId = C.formatProfileIdDisplay(player?._id || player?.id || player?.profile_id || player?.profile?.id || "ID");
     const documentAccent = C.normalizeHexColor(primaryCardColor || "#8b6cff");
     const documentBackground = C.normalizeHexColor(primaryCardColor || "#8b6cff");
-    const documentPaletteGradient = C.buildPaletteGradient(cardColorConfig.colors, "135deg");
-    const documentPaletteLoopGradient = C.buildPaletteLoopGradient(cardColorConfig.colors, "90deg");
+    // Documento: preserva a identidade do card_color, mas clareia a paleta
+    // para um acabamento pastel/luminoso menos carregado que o card oficial.
+    const documentPastelPalette = (cardColorConfig.colors.length ? cardColorConfig.colors : [documentAccent])
+      .map((color) => C.interpolateHexColor(C.normalizeHexColor(color, documentAccent), "#ffffff", 0.34));
+    const documentPaletteGradient = C.buildPaletteGradient(documentPastelPalette, "135deg");
+    const characterSlotBackground = C.cleanValue(slotData.background_color || "");
     const onlineLabel = getOnlineLabel(player);
     const onlineToken = getOnlineToken(player);
 
@@ -307,9 +398,13 @@
           class="vl-profile-record-main vl-profile-public-id-card"
           aria-label="Documento de identidade pública"
           data-vp-card-color-type="${C.escapeHtml(cardColorConfig.type || "none")}"
-          data-vp-card-color-speed="${C.escapeHtml(cardColorConfig.speed || 10)}"
+          ${cardColorConfig.type === "gradient" ? "" : `data-vp-card-color-speed="${C.escapeHtml(cardColorConfig.speed || 10)}"`}
           data-vp-card-color-palette="${C.escapeHtml(cardColorConfig.colors.join(","))}"
-          style="--vp-document-accent:${C.escapeHtml(documentAccent)};--vp-document-color:${C.escapeHtml(documentBackground)};--vp-document-color-speed:${C.escapeHtml(cardColorConfig.speed || 10)}s;--vp-document-palette-gradient:${C.escapeHtml(documentPaletteGradient)};--vp-document-palette-loop-gradient:${C.escapeHtml(documentPaletteLoopGradient)};"
+          data-character-slot-id="${C.escapeHtml(characterSlot.id || normalizeCharacterSlotId(requestedCharacterSlotId, "id_1"))}"
+          data-character-slot-count="${C.escapeHtml(characterSlot.ids.length || 1)}"
+          data-character-slot-ids="${C.escapeHtml((characterSlot.ids || []).join(","))}"
+          data-character-slot-missing="${characterSlot.missing ? "true" : "false"}"
+          style="--vp-character-slot-background:${C.escapeHtml(characterSlotBackground || "transparent")};--vp-document-accent:${C.escapeHtml(documentAccent)};--vp-document-color:${C.escapeHtml(documentBackground)};${cardColorConfig.type === "gradient" ? "" : `--vp-document-color-speed:${C.escapeHtml(cardColorConfig.speed || 10)}s;`}--vp-document-palette-gradient:${C.escapeHtml(documentPaletteGradient)};"
         >
           <div class="vl-profile-public-id-card__shine" aria-hidden="true"></div>
           ${profileFrameImage ? `

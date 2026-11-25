@@ -1,14 +1,16 @@
 /* ======================================================================
-   Velarion Card FX — efeitos externos para a carta do perfil
-
-   Este arquivo NÃO altera a estrutura interna de .vl-card.
-   Ele usa .vl-profile-card-port apenas como palco visual.
-   v3: geometria sincronizada com o retângulo REAL renderizado de .vl-card.
+   Velarion Card FX — REBUILD v8.1 / gradient cc_id1+cc_id2
+   Sistema visual externo sincronizado com theme.card_embed.card_color.
    ====================================================================== */
 
-.vl-profile-card-port[data-vfx-ready="true"] {
-  --vfx-color: #ff6b8b;
-  --vfx-color-2: #8b6cff;
+.vl-profile-card-port[data-official-card-port="true"][data-vfx-ready="true"] {
+  --vfx-primary: #ff6b8b;
+  --vfx-secondary: #8b6cff;
+  --vfx-glow: var(--vfx-primary);
+  --vfx-color-speed: 10s;
+  --vfx-palette-gradient: linear-gradient(135deg, var(--vfx-primary), var(--vfx-secondary));
+  --vfx-palette-loop-gradient: linear-gradient(90deg, var(--vfx-primary), var(--vfx-secondary), var(--vfx-primary));
+
   --vfx-card-width: 360px;
   --vfx-card-height: 520px;
   --vfx-half-card-width: 180px;
@@ -24,7 +26,13 @@
   overflow: visible;
 }
 
-.vl-profile-card-port[data-vfx-ready="true"] > .vl-card-slot {
+.vl-profile-card-port[data-vfx-ready="true"] .vl-card-scale {
+  position: relative;
+  overflow: visible;
+  isolation: isolate;
+}
+
+.vl-profile-card-port[data-vfx-ready="true"] .vl-card-scale > .vl-card {
   position: relative;
   z-index: 2;
 }
@@ -42,21 +50,39 @@
   transform-origin: center;
   pointer-events: none;
   user-select: none;
-}
-
-.vl-card-fx {
-  z-index: 0;
-}
-
-.vl-card-fx-front {
-  z-index: 4;
   overflow: visible;
 }
 
+.vl-card-fx { z-index: 0; }
+.vl-card-fx-front { z-index: 4; }
+
 .vl-card-fx *,
-.vl-card-fx-front * {
+.vl-card-fx-front *,
+.vl-card-fx *::before,
+.vl-card-fx *::after,
+.vl-card-fx-front *::before,
+.vl-card-fx-front *::after {
   box-sizing: border-box;
   pointer-events: none;
+}
+
+/* ----------------------------------------------------------------------
+   Campo multicolor externo
+   ---------------------------------------------------------------------- */
+
+.vl-card-fx__palette-field {
+  position: absolute;
+  inset: 44px 24px 56px;
+  border-radius: 40%;
+  opacity: 0;
+  filter: blur(23px) saturate(1.2);
+  transform: scale(.98);
+  background: var(--vfx-palette-gradient);
+  transition: opacity .24s ease;
+}
+
+.vl-profile-card-port[data-vfx-color-type="gradient"] .vl-card-fx__palette-field {
+  opacity: calc(.27 * var(--vfx-intensity));
 }
 
 /* ----------------------------------------------------------------------
@@ -72,12 +98,11 @@
 }
 
 .vl-card-fx__aura {
-  inset: 75px 58px 92px;
+  inset: 55px 38px 72px;
   background:
-    radial-gradient(ellipse at 50% 42%, color-mix(in srgb, var(--vfx-color) 27%, transparent), transparent 63%),
-    radial-gradient(ellipse at 58% 58%, color-mix(in srgb, var(--vfx-color-2) 20%, transparent), transparent 70%);
-  filter: blur(22px);
-  opacity: .82;
+    radial-gradient(ellipse at 50% 42%, color-mix(in srgb, var(--vfx-primary) 27%, transparent), transparent 70%),
+    radial-gradient(ellipse at 58% 58%, color-mix(in srgb, var(--vfx-secondary) 20%, transparent), transparent 75%);
+  opacity: calc(.82 * var(--vfx-intensity));
   animation: vl-vfx-aura-breathe 4.8s ease-in-out infinite;
 }
 
@@ -85,24 +110,31 @@
   inset: 6% 12%;
   background: conic-gradient(
     from 20deg,
-    transparent 0 12%,
-    color-mix(in srgb, var(--vfx-color) 34%, transparent) 18%,
-    transparent 25% 48%,
-    color-mix(in srgb, var(--vfx-color-2) 29%, transparent) 57%,
-    transparent 66% 100%
+    transparent 0 10%,
+    color-mix(in srgb, var(--vfx-primary) 34%, transparent) 16% 22%,
+    transparent 28% 46%,
+    color-mix(in srgb, var(--vfx-secondary) 29%, transparent) 54% 62%,
+    transparent 68% 100%
   );
-  filter: blur(18px);
   animation: vl-vfx-spin 14s linear infinite;
 }
 
 .vl-card-fx__aura::after {
   inset: 18% 9%;
-  border: 1px solid color-mix(in srgb, var(--vfx-color) 30%, transparent);
+  border: 1px solid color-mix(in srgb, var(--vfx-primary) 30%, transparent);
   box-shadow:
-    0 0 34px color-mix(in srgb, var(--vfx-color) 24%, transparent),
-    inset 0 0 28px color-mix(in srgb, var(--vfx-color-2) 14%, transparent);
+    0 0 34px color-mix(in srgb, var(--vfx-primary) 24%, transparent),
+    inset 0 0 28px color-mix(in srgb, var(--vfx-secondary) 14%, transparent);
   opacity: .7;
   animation: vl-vfx-aura-ring 5.7s ease-in-out infinite;
+}
+
+/* Gradient recebem a paleta inteira na aura, não apenas cc_id1/cc_id2. */
+.vl-profile-card-port[data-vfx-color-type="gradient"] .vl-card-fx__aura::before .vl-card-fx__aura::before  {
+  background: var(--vfx-palette-loop-gradient);
+  -webkit-mask: radial-gradient(farthest-side, transparent 46%, #000 50%, #000 56%, transparent 61%);
+  mask: radial-gradient(farthest-side, transparent 46%, #000 50%, #000 56%, transparent 61%);
+  opacity: .58;
 }
 
 /* ----------------------------------------------------------------------
@@ -117,11 +149,13 @@
   height: calc(var(--vfx-card-height) + 42px);
   border-radius: 46%;
   transform: translate(-50%, -50%) rotate(var(--orbit-angle, 0deg));
-  border: 1px solid color-mix(in srgb, var(--vfx-color) 24%, transparent);
-  box-shadow:
-    0 0 18px color-mix(in srgb, var(--vfx-color) 14%, transparent),
-    inset 0 0 16px color-mix(in srgb, var(--vfx-color-2) 11%, transparent);
-  opacity: .76;
+  padding: 1px;
+  background: linear-gradient(135deg, var(--vfx-primary), var(--vfx-secondary), var(--vfx-primary));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  filter: drop-shadow(0 0 8px color-mix(in srgb, var(--vfx-glow) 28%, transparent));
+  opacity: .70;
   animation: vl-vfx-orbit 15s linear infinite;
 }
 
@@ -135,34 +169,32 @@
   background: #fff;
   box-shadow:
     0 0 5px #fff,
-    0 0 14px var(--vfx-color),
-    0 0 28px var(--vfx-color);
+    0 0 14px var(--vfx-primary),
+    0 0 28px var(--vfx-primary);
 }
 
-.vl-card-fx__orbit::before {
-  left: 12%;
-  top: 7%;
-}
-
+.vl-card-fx__orbit::before { left: 12%; top: 7%; }
 .vl-card-fx__orbit::after {
   right: 9%;
   bottom: 12%;
-  background: color-mix(in srgb, var(--vfx-color-2) 70%, #fff 30%);
+  background: color-mix(in srgb, var(--vfx-secondary) 70%, #fff 30%);
 }
 
 .vl-card-fx__orbit--b {
   width: calc(var(--vfx-card-width) + 74px);
   height: calc(var(--vfx-card-height) + 18px);
   --orbit-angle: 9deg;
-  border-style: dashed;
-  border-color: color-mix(in srgb, var(--vfx-color-2) 18%, transparent);
-  opacity: .52;
+  opacity: .48;
   animation-duration: 22s;
   animation-direction: reverse;
 }
 
+.vl-profile-card-port[data-vfx-color-type="gradient"] .vl-card-fx__orbit {
+  background: var(--vfx-palette-gradient);
+}
+
 /* ----------------------------------------------------------------------
-   Contorno energético alinhado à carta
+   Contorno energético alinhado ao card
    ---------------------------------------------------------------------- */
 
 .vl-card-fx__edge {
@@ -173,32 +205,24 @@
   height: var(--vfx-card-height);
   transform: translate(-50%, -50%);
   border-radius: 22px;
-  border: 1px solid color-mix(in srgb, var(--vfx-color) 42%, transparent);
-  box-shadow:
-    0 0 8px color-mix(in srgb, var(--vfx-color) 40%, transparent),
-    0 0 24px color-mix(in srgb, var(--vfx-color) 23%, transparent),
-    inset 0 0 18px color-mix(in srgb, var(--vfx-color-2) 10%, transparent);
-  opacity: .8;
+  padding: 1px;
+  background: linear-gradient(135deg, var(--vfx-primary), var(--vfx-secondary), var(--vfx-primary));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  filter:
+    drop-shadow(0 0 8px color-mix(in srgb, var(--vfx-primary) 40%, transparent))
+    drop-shadow(0 0 24px color-mix(in srgb, var(--vfx-glow) 23%, transparent));
+  opacity: .80;
   animation: vl-vfx-edge-pulse 3.3s ease-in-out infinite;
 }
 
-.vl-card-fx__edge::before,
-.vl-card-fx__edge::after {
-  content: "";
-  position: absolute;
-  left: 8%;
-  right: 8%;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, #fff, var(--vfx-color), transparent);
-  filter: drop-shadow(0 0 8px var(--vfx-color));
-  opacity: .75;
+.vl-profile-card-port[data-vfx-color-type="gradient"] .vl-card-fx__edge {
+  background: var(--vfx-palette-gradient);
 }
 
-.vl-card-fx__edge::before { top: -1px; }
-.vl-card-fx__edge::after { bottom: -1px; transform: scaleX(-1); }
-
 /* ----------------------------------------------------------------------
-   Reflexos que passam pela borda / frente
+   Reflexos de frente
    ---------------------------------------------------------------------- */
 
 .vl-card-fx-front__sweep {
@@ -217,18 +241,16 @@
   content: "";
   position: absolute;
   top: -18%;
-  left: -55%;
+  left: 0;
   width: 34%;
   height: 136%;
-  transform: skewX(-18deg);
   background: linear-gradient(
     90deg,
     transparent,
-    color-mix(in srgb, #fff 34%, transparent),
-    color-mix(in srgb, var(--vfx-color) 18%, transparent),
+    rgba(255,255,255,.34),
+    color-mix(in srgb, var(--vfx-primary) 18%, transparent),
     transparent
   );
-  filter: blur(4px);
   animation: vl-vfx-sweep 7.2s cubic-bezier(.2,.65,.22,1) infinite;
 }
 
@@ -242,14 +264,20 @@
   border-radius: 26px;
   opacity: .75;
   background:
-    linear-gradient(90deg, transparent 0 5%, color-mix(in srgb, var(--vfx-color) 70%, #fff 30%) 11%, transparent 17%) top / 190% 2px no-repeat,
-    linear-gradient(270deg, transparent 0 5%, color-mix(in srgb, var(--vfx-color-2) 70%, #fff 30%) 11%, transparent 17%) bottom / 190% 2px no-repeat;
-  filter: drop-shadow(0 0 8px var(--vfx-color));
+    linear-gradient(90deg, transparent 0 5%, color-mix(in srgb, var(--vfx-primary) 70%, #fff 30%) 11%, transparent 17%) top / 190% 2px no-repeat,
+    linear-gradient(270deg, transparent 0 5%, color-mix(in srgb, var(--vfx-secondary) 70%, #fff 30%) 11%, transparent 17%) bottom / 190% 2px no-repeat;
+  filter: drop-shadow(0 0 8px var(--vfx-glow));
   animation: vl-vfx-edge-run 4.9s linear infinite;
 }
 
+.vl-profile-card-port[data-vfx-color-type="gradient"] .vl-card-fx-front__beam .vl-card-fx-front__beam  {
+  background:
+    var(--vfx-palette-loop-gradient) top / 300% 2px no-repeat,
+    var(--vfx-palette-loop-gradient) bottom / 300% 2px no-repeat;
+}
+
 /* ----------------------------------------------------------------------
-   Cristais / pontos de energia nos cantos
+   Cristais
    ---------------------------------------------------------------------- */
 
 .vl-card-fx-front__crystal {
@@ -257,13 +285,17 @@
   width: 14px;
   height: 14px;
   transform: rotate(45deg);
-  background: linear-gradient(135deg, #fff, var(--vfx-color) 42%, var(--vfx-color-2));
-  border: 1px solid color-mix(in srgb, #fff 68%, var(--vfx-color) 32%);
+  background: linear-gradient(135deg, #fff, var(--vfx-primary) 42%, var(--vfx-secondary));
+  border: 1px solid color-mix(in srgb, #fff 68%, var(--vfx-primary) 32%);
   box-shadow:
     0 0 7px #fff,
-    0 0 16px var(--vfx-color),
-    0 0 30px color-mix(in srgb, var(--vfx-color-2) 72%, transparent);
+    0 0 16px var(--vfx-primary),
+    0 0 30px color-mix(in srgb, var(--vfx-secondary) 72%, transparent);
   animation: vl-vfx-crystal 3.1s ease-in-out infinite;
+}
+
+.vl-profile-card-port[data-vfx-color-type="gradient"] .vl-card-fx-front__crystal .vl-card-fx-front__crystal  {
+  background: var(--vfx-palette-gradient);
 }
 
 .vl-card-fx-front__crystal--tl {
@@ -290,20 +322,18 @@
 }
 
 /* ----------------------------------------------------------------------
-   Plataforma de luz sob a carta
+   Plataforma de luz
    ---------------------------------------------------------------------- */
 
 .vl-card-fx__floor {
   position: absolute;
   left: 50%;
   top: calc(50% + var(--vfx-half-card-height) + 25px);
-  width: calc(var(--vfx-card-width) - 64px);
-  height: 42px;
+  width: calc(var(--vfx-card-width) - 36px);
+  height: 52px;
   transform: translateX(-50%);
   border-radius: 50%;
-  background:
-    radial-gradient(ellipse at center, color-mix(in srgb, var(--vfx-color) 46%, transparent), transparent 68%);
-  filter: blur(7px);
+  background: radial-gradient(ellipse at center, color-mix(in srgb, var(--vfx-primary) 46%, transparent), transparent 60%);
   opacity: .72;
   animation: vl-vfx-floor 3.8s ease-in-out infinite;
 }
@@ -314,9 +344,13 @@
   left: 12%;
   right: 12%;
   top: 50%;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, var(--vfx-color-2), #fff, var(--vfx-color), transparent);
-  box-shadow: 0 0 12px var(--vfx-color), 0 0 24px var(--vfx-color-2);
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--vfx-secondary), #fff, var(--vfx-primary), transparent);
+  box-shadow: 0 0 12px var(--vfx-primary), 0 0 24px var(--vfx-secondary);
+}
+
+.vl-profile-card-port[data-vfx-color-type="gradient"] .vl-card-fx__floor::before {
+  background: var(--vfx-palette-gradient);
 }
 
 /* ----------------------------------------------------------------------
@@ -341,11 +375,8 @@
   height: var(--particle-size);
   border-radius: 50%;
   opacity: var(--particle-opacity);
-  background: color-mix(in srgb, var(--particle-color, var(--vfx-color)) 72%, #fff 28%);
-  box-shadow:
-    0 0 5px #fff,
-    0 0 12px var(--particle-color, var(--vfx-color)),
-    0 0 24px color-mix(in srgb, var(--particle-color, var(--vfx-color)) 70%, transparent);
+  background: color-mix(in srgb, var(--particle-color, var(--vfx-primary)) 72%, #fff 28%);
+  box-shadow: 0 0 10px var(--particle-color, var(--vfx-primary));
   animation:
     vl-vfx-particle-float var(--particle-duration, 5s) ease-in-out infinite,
     vl-vfx-particle-twinkle var(--particle-twinkle, 2.2s) ease-in-out infinite;
@@ -373,21 +404,14 @@
   top: 50%;
   background: #fff;
   transform: translate(-50%, -50%);
-  box-shadow: 0 0 10px var(--particle-color, var(--vfx-color));
+  box-shadow: 0 0 10px var(--particle-color, var(--vfx-primary));
 }
 
-.vl-card-fx__particle[data-shape="star"]::before {
-  width: 100%;
-  height: 1px;
-}
-
-.vl-card-fx__particle[data-shape="star"]::after {
-  width: 1px;
-  height: 100%;
-}
+.vl-card-fx__particle[data-shape="star"]::before { width: 100%; height: 1px; }
+.vl-card-fx__particle[data-shape="star"]::after { width: 1px; height: 100%; }
 
 /* ----------------------------------------------------------------------
-   Pulso especial ocasional — ativado pelo JS
+   Surge ocasional
    ---------------------------------------------------------------------- */
 
 .vl-profile-card-port.is-vfx-surging .vl-card-fx__aura {
@@ -395,14 +419,17 @@
 }
 
 .vl-profile-card-port.is-vfx-surging .vl-card-fx__edge {
-  animation: vl-vfx-surge-edge .95s cubic-bezier(.2,.75,.22,1) both;
+  filter:
+    drop-shadow(0 0 10px #fff)
+    drop-shadow(0 0 20px var(--vfx-primary))
+    drop-shadow(0 0 34px var(--vfx-secondary));
 }
 
 .vl-profile-card-port.is-vfx-surging .vl-card-fx-front__beam {
   filter:
     drop-shadow(0 0 9px #fff)
-    drop-shadow(0 0 18px var(--vfx-color))
-    drop-shadow(0 0 30px var(--vfx-color-2));
+    drop-shadow(0 0 18px var(--vfx-primary))
+    drop-shadow(0 0 30px var(--vfx-secondary));
 }
 
 .vl-profile-card-port.is-vfx-surging .vl-card-fx__particle {
@@ -482,16 +509,21 @@
   to { transform: translate(-50%, -50%) rotate(calc(var(--orbit-angle, 0deg) + 360deg)); }
 }
 
+@keyframes vl-vfx-orbit-reverse {
+  from { transform: translate(-50%, -50%) rotate(calc(var(--orbit-angle, 0deg) + 360deg)); }
+  to { transform: translate(-50%, -50%) rotate(var(--orbit-angle, 0deg)); }
+}
+
 @keyframes vl-vfx-edge-pulse {
-  0%, 100% { opacity: .52; filter: brightness(.9); }
-  50% { opacity: .95; filter: brightness(1.25); }
+  0%, 100% { opacity: .52; }
+  50% { opacity: .95; }
 }
 
 @keyframes vl-vfx-sweep {
-  0%, 72% { left: -55%; opacity: 0; }
+  0%, 72% { transform: translateX(-200%) skewX(-18deg); opacity: 0; }
   76% { opacity: .85; }
   91% { opacity: .72; }
-  100% { left: 125%; opacity: 0; }
+  100% { transform: translateX(400%) skewX(-18deg); opacity: 0; }
 }
 
 @keyframes vl-vfx-edge-run {
@@ -510,12 +542,8 @@
 }
 
 @keyframes vl-vfx-particle-float {
-  0%, 100% {
-    transform: translate3d(0, 7px, 0) scale(.72) rotate(0deg);
-  }
-  50% {
-    transform: translate3d(var(--particle-drift-x, 8px), var(--particle-drift-y, -18px), 0) scale(1.12) rotate(90deg);
-  }
+  0%, 100% { transform: translate3d(0, 7px, 0) scale(.72) rotate(0deg); }
+  50% { transform: translate3d(var(--particle-drift-x, 8px), var(--particle-drift-y, -18px), 0) scale(1.12) rotate(90deg); }
 }
 
 @keyframes vl-vfx-particle-twinkle {
@@ -524,228 +552,65 @@
 }
 
 @keyframes vl-vfx-surge-aura {
-  0% { transform: scale(.96); filter: blur(22px) brightness(1); }
-  38% { transform: scale(1.10); filter: blur(18px) brightness(1.65); }
-  100% { transform: scale(1); filter: blur(22px) brightness(1); }
+  0% { transform: scale(.96); filter: blur(.2px) brightness(1); }
+  38% { transform: scale(1.10); filter: blur(.2px) brightness(1.65); }
+  100% { transform: scale(1); filter: blur(.2px) brightness(1); }
 }
 
-@keyframes vl-vfx-surge-edge {
-  0% { opacity: .55; transform: translate(-50%, -50%) scale(1); }
-  38% { opacity: 1; transform: translate(-50%, -50%) scale(1.028); }
-  100% { opacity: .74; transform: translate(-50%, -50%) scale(1); }
+@keyframes vl-vfx-palette-flow {
+  from { background-position: 0% 0; }
+  to { background-position: 300% 0; }
 }
 
-/* ======================================================================
-   v4 — FLUTUAÇÃO EXCLUSIVA DO VELARION PROFILE
+@keyframes vl-vfx-palette-flow-reverse {
+  from { background-position: 300% 0; }
+  to { background-position: 0% 0; }
+}
 
-   A carta oficial e as camadas FX sobem/descem juntas sem alterar a
-   geometria da página. O seletor exige .vl-profile-card-port, portanto
-   este comportamento NÃO afeta cards usados em listas, previews ou
-   qualquer outra área do site.
-   ====================================================================== */
+/* ----------------------------------------------------------------------
+   Flutuação 3D do profile — preservada do comportamento visual anterior.
+   O card e o FX se movem juntos porque o port inteiro é animado.
+   ---------------------------------------------------------------------- */
 
 .vl-profile-card-port[data-official-card-port="true"][data-vfx-ready="true"] {
-  --vfx-float-distance: 7px;
-  --vfx-float-duration: 5.4s;
-}
-
-/*
-   `translate` é uma propriedade de transformação independente de
-   `transform`. Assim preservamos o transform interno do FX (que posiciona
-   e faz o parallax) e acrescentamos apenas a flutuação vertical.
-*/
-.vl-profile-card-port[data-official-card-port="true"][data-vfx-ready="true"] > .vl-card-slot,
-.vl-profile-card-port[data-official-card-port="true"][data-vfx-ready="true"] > .vl-card-fx,
-.vl-profile-card-port[data-official-card-port="true"][data-vfx-ready="true"] > .vl-card-fx-front {
-  animation: vl-vfx-profile-float var(--vfx-float-duration) cubic-bezier(.45, .05, .55, .95) infinite;
-  will-change: translate;
-}
-
-/* Pequena defasagem visual do brilho traseiro, sem desalinhá-lo da carta. */
-.vl-profile-card-port[data-official-card-port="true"][data-vfx-ready="true"] > .vl-card-fx {
-  animation-timing-function: cubic-bezier(.42, .02, .58, .98);
-}
-
-/*
-   A plataforma luminosa compensa a subida do grupo. Na prática ela fica
-   quase parada enquanto a carta sobe, reforçando a sensação de suspensão.
-*/
-.vl-profile-card-port[data-official-card-port="true"][data-vfx-ready="true"] .vl-card-fx__floor {
-  animation:
-    vl-vfx-floor 3.8s ease-in-out infinite,
-    vl-vfx-profile-floor-anchor var(--vfx-float-duration) cubic-bezier(.45, .05, .55, .95) infinite;
-  will-change: transform, translate, opacity;
-}
-
-/* Uma sombra ambiente discreta cresce quando a carta sobe. */
-.vl-profile-card-port[data-official-card-port="true"][data-vfx-ready="true"]::after {
-  content: "";
-  position: absolute;
-  z-index: -1;
-  left: var(--vfx-card-center-x, 50%);
-  top: calc(var(--vfx-card-center-y, 260px) + var(--vfx-half-card-height, 260px) + 28px);
-  width: calc(var(--vfx-card-width, 360px) * .70);
-  height: 28px;
-  translate: -50% 0;
-  border-radius: 50%;
-  pointer-events: none;
-  background: radial-gradient(
-    ellipse at center,
-    color-mix(in srgb, var(--vfx-color) 19%, rgba(0,0,0,.36)),
-    rgba(0,0,0,.18) 42%,
-    transparent 72%
-  );
-  filter: blur(9px);
-  opacity: .52;
-  animation: vl-vfx-profile-shadow var(--vfx-float-duration) cubic-bezier(.45, .05, .55, .95) infinite;
-}
-
-@keyframes vl-vfx-profile-float {
-  0%, 100% {
-    translate: 0 0;
-  }
-  22% {
-    translate: 0 calc(var(--vfx-float-distance) * -.42);
-  }
-  50% {
-    translate: 0 calc(var(--vfx-float-distance) * -1);
-  }
-  78% {
-    translate: 0 calc(var(--vfx-float-distance) * -.35);
-  }
-}
-
-@keyframes vl-vfx-profile-floor-anchor {
-  0%, 100% {
-    translate: 0 0;
-  }
-  22% {
-    translate: 0 calc(var(--vfx-float-distance) * .42);
-  }
-  50% {
-    translate: 0 var(--vfx-float-distance);
-  }
-  78% {
-    translate: 0 calc(var(--vfx-float-distance) * .35);
-  }
-}
-
-@keyframes vl-vfx-profile-shadow {
-  0%, 100% {
-    scale: 1;
-    opacity: .52;
-    filter: blur(9px);
-  }
-  50% {
-    scale: .84;
-    opacity: .30;
-    filter: blur(11px);
-  }
-}
-
-/* Mobile: movimento menor para não parecer que o card "pula". */
-@media (max-width: 520px) {
-  .vl-profile-card-port[data-official-card-port="true"][data-vfx-ready="true"] {
-    --vfx-float-distance: 4px;
-    --vfx-float-duration: 5.8s;
-  }
-}
-
-/* Acessibilidade: a carta continua estática quando o sistema reduz movimento. */
-@media (prefers-reduced-motion: reduce) {
-  .vl-profile-card-port[data-official-card-port="true"][data-vfx-ready="true"] > .vl-card-slot,
-  .vl-profile-card-port[data-official-card-port="true"][data-vfx-ready="true"] > .vl-card-fx,
-  .vl-profile-card-port[data-official-card-port="true"][data-vfx-ready="true"] > .vl-card-fx-front,
-  .vl-profile-card-port[data-official-card-port="true"][data-vfx-ready="true"] .vl-card-fx__floor,
-  .vl-profile-card-port[data-official-card-port="true"][data-vfx-ready="true"]::after {
-    animation: none !important;
-    translate: 0 0;
-    scale: 1;
-  }
-}
-
-/* ======================================================================
-   Velarion Card FX V5 — flutuação 3D por ARFAGEM (pitch)
-
-   O conjunto inteiro (.vl-card + FX) inclina suavemente no eixo X entre
-   -30deg e +30deg dentro do velarion-profile. Não altera velarion-card.css
-   nem velarion-card.js; somente o host oficial do perfil recebe o movimento.
-   ====================================================================== */
-
-.vl-profile-card-port[data-official-card-port="true"][data-vfx-ready="true"] {
-  --vfx-pitch-angle: 30deg;
+  --vfx-pitch-angle: 12deg;
   --vfx-pitch-duration: 8s;
   --vfx-pitch-lift: 9px;
-  --vfx-pitch-perspective: 1150px;
 
+  perspective: 1150px;
+  perspective-origin: 50% 50%;
   transform-origin: 50% 50%;
-  transform-style: preserve-3d;
   will-change: transform;
   animation: vl-vfx-profile-pitch-float var(--vfx-pitch-duration) cubic-bezier(.45,.05,.55,.95) infinite;
 }
 
-/*
-   V4 fazia cada camada subir separadamente. Na V5 isso é desligado: agora
-   o PORT inteiro se move, então card, borda, partículas, cristais e aura
-   permanecem perfeitamente presos uns aos outros durante a rotação 3D.
-*/
-.vl-profile-card-port[data-official-card-port="true"][data-vfx-ready="true"] > .vl-card-slot,
-.vl-profile-card-port[data-official-card-port="true"][data-vfx-ready="true"] > .vl-card-fx,
-.vl-profile-card-port[data-official-card-port="true"][data-vfx-ready="true"] > .vl-card-fx-front {
-  animation: none !important;
-  translate: 0 0 !important;
-}
-
-/* A plataforma volta à animação própria do FX, sem compensação da V4. */
 .vl-profile-card-port[data-official-card-port="true"][data-vfx-ready="true"] .vl-card-fx__floor {
   animation: vl-vfx-floor 3.8s ease-in-out infinite;
-  translate: 0 0;
 }
 
-/* Remove a sombra auxiliar da flutuação vertical antiga. */
 .vl-profile-card-port[data-official-card-port="true"][data-vfx-ready="true"]::after {
   display: none !important;
 }
 
 @keyframes vl-vfx-profile-pitch-float {
   0%, 100% {
-    transform:
-      perspective(var(--vfx-pitch-perspective))
-      translate3d(0, 3px, 0)
-      rotateX(calc(var(--vfx-pitch-angle) * -1));
+    translate: 0 3px;
+    transform: rotateX(calc(var(--vfx-pitch-angle) * -1));
   }
-
   25% {
-    transform:
-      perspective(var(--vfx-pitch-perspective))
-      translate3d(0, calc(var(--vfx-pitch-lift) * -1), 0)
-      rotateX(0deg);
+    translate: 0 calc(var(--vfx-pitch-lift) * -1);
+    transform: rotateX(0deg);
   }
-
   50% {
-    transform:
-      perspective(var(--vfx-pitch-perspective))
-      translate3d(0, 3px, 0)
-      rotateX(var(--vfx-pitch-angle));
+    translate: 0 3px;
+    transform: rotateX(var(--vfx-pitch-angle));
   }
-
   75% {
-    transform:
-      perspective(var(--vfx-pitch-perspective))
-      translate3d(0, calc(var(--vfx-pitch-lift) * -1), 0)
-      rotateX(0deg);
+    translate: 0 calc(var(--vfx-pitch-lift) * -1);
+    transform: rotateX(0deg);
   }
 }
 
-/* Mantém os elementos internos em uma composição 3D estável. */
-.vl-profile-card-port[data-official-card-port="true"][data-vfx-ready="true"] > .vl-card-slot,
-.vl-profile-card-port[data-official-card-port="true"][data-vfx-ready="true"] > .vl-card-fx,
-.vl-profile-card-port[data-official-card-port="true"][data-vfx-ready="true"] > .vl-card-fx-front {
-  transform-style: preserve-3d;
-  backface-visibility: hidden;
-}
-
-/* Em telas pequenas continua 3D, mas com um pouco menos de deslocamento. */
 @media (max-width: 520px) {
   .vl-profile-card-port[data-official-card-port="true"][data-vfx-ready="true"] {
     --vfx-pitch-lift: 5px;
@@ -757,6 +622,75 @@
   .vl-profile-card-port[data-official-card-port="true"][data-vfx-ready="true"] {
     animation: none !important;
     transform: none !important;
+    translate: none !important;
   }
 }
 
+
+/* ======================================================================
+   CARD COLOR TYPE SYNC — v8.4
+   Os efeitos externos seguem exclusivamente theme.card_embed.card_color.cc_type.
+   none     = sem FX externo
+   gradient = paleta estática
+   rotate   = acompanha a troca de cc_idN
+   pulse    = acompanha a transição suave entre cc_idN
+   rainbow  = espectro contínuo independente da paleta
+   ====================================================================== */
+
+/* NONE: remove completamente os elementos de FX que ficam fora do cartão. */
+.vl-profile-card-port[data-vfx-ready="true"][data-vfx-color-type="none"] .vl-card-fx,
+.vl-profile-card-port[data-vfx-ready="true"][data-vfx-color-type="none"] .vl-card-fx-front {
+  display: none !important;
+}
+
+/* GRADIENT: a paleta permanece estática; os movimentos geométricos existentes
+   continuam, mas nenhuma cor é trocada pelo runtime. */
+.vl-profile-card-port[data-vfx-ready="true"][data-vfx-color-type="gradient"] .vl-card-fx__palette-field,
+.vl-profile-card-port[data-vfx-ready="true"][data-vfx-color-type="gradient"] .vl-card-fx__aura,
+.vl-profile-card-port[data-vfx-ready="true"][data-vfx-color-type="gradient"] .vl-card-fx__orbit,
+.vl-profile-card-port[data-vfx-ready="true"][data-vfx-color-type="gradient"] .vl-card-fx__edge,
+.vl-profile-card-port[data-vfx-ready="true"][data-vfx-color-type="gradient"] .vl-card-fx-front__beam,
+.vl-profile-card-port[data-vfx-ready="true"][data-vfx-color-type="gradient"] .vl-card-fx-front__crystal {
+  background-image: var(--vfx-palette-gradient);
+}
+
+/* RAINBOW: espectro contínuo nos elementos externos. */
+.vl-profile-card-port[data-vfx-ready="true"][data-vfx-color-type="rainbow"] {
+  --vfx-rainbow-gradient: linear-gradient(90deg, #ff304f 0%, #ff8a2a 16.66%, #ffe45b 33.33%, #45e88a 50%, #38a8ff 66.66%, #7d5cff 83.33%, #ff3fc8 100%, #ff304f 116.66%);
+}
+
+.vl-profile-card-port[data-vfx-ready="true"][data-vfx-color-type="rainbow"] .vl-card-fx__palette-field,
+.vl-profile-card-port[data-vfx-ready="true"][data-vfx-color-type="rainbow"] .vl-card-fx__orbit,
+.vl-profile-card-port[data-vfx-ready="true"][data-vfx-color-type="rainbow"] .vl-card-fx__edge,
+.vl-profile-card-port[data-vfx-ready="true"][data-vfx-color-type="rainbow"] .vl-card-fx-front__beam,
+.vl-profile-card-port[data-vfx-ready="true"][data-vfx-color-type="rainbow"] .vl-card-fx-front__crystal,
+.vl-profile-card-port[data-vfx-ready="true"][data-vfx-color-type="rainbow"] .vl-card-fx__floor::before {
+  background-image: var(--vfx-rainbow-gradient);
+  background-size: 300% 100%;
+  animation-name: vl-vfx-rainbow-flow;
+  animation-duration: var(--vfx-color-speed, 10s);
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+}
+
+.vl-profile-card-port[data-vfx-ready="true"][data-vfx-color-type="rainbow"] .vl-card-fx__aura {
+  background:
+    radial-gradient(ellipse at 50% 42%, rgba(255,48,79,.20), transparent 70%),
+    radial-gradient(ellipse at 58% 58%, rgba(56,168,255,.16), transparent 75%);
+}
+
+@keyframes vl-vfx-rainbow-flow {
+  from { background-position: 0% 50%; }
+  to { background-position: 300% 50%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vl-profile-card-port[data-vfx-ready="true"][data-vfx-color-type="rainbow"] .vl-card-fx__palette-field,
+  .vl-profile-card-port[data-vfx-ready="true"][data-vfx-color-type="rainbow"] .vl-card-fx__edge,
+  .vl-profile-card-port[data-vfx-ready="true"][data-vfx-color-type="rainbow"] .vl-card-fx-front__beam,
+  .vl-profile-card-port[data-vfx-ready="true"][data-vfx-color-type="rainbow"] .vl-card-fx-front__crystal,
+  .vl-profile-card-port[data-vfx-ready="true"][data-vfx-color-type="rainbow"] .vl-card-fx__floor::before {
+    animation: none !important;
+    background-position: 50% 50%;
+  }
+}

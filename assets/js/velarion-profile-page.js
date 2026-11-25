@@ -9,6 +9,7 @@
   const S = window.VelarionShared || {};
 
   const PLAYER_DATA_URL = "https://kazimuhwaribedrock-default-rtdb.firebaseio.com/profilePlayers.json";
+  const BADGES_PLAYER_DATA_URL = "https://kazimuhwaribedrock-badges-default-rtdb.firebaseio.com/badgesPlayers.json";
   const EXTENSIONS_BASE_URL = "https://kazimuhwaribedrock-extensions-default-rtdb.firebaseio.com";
   const EXTENSIONS_DATA_URL = EXTENSIONS_BASE_URL + "/information_panel.json";
   const SERVER_PANEL_DATA_URL = EXTENSIONS_BASE_URL + "/server_panel.json";
@@ -19,6 +20,9 @@
   let websitePanelData = null;
   let clansData = {};
   let profilePlayersDataSource = {};
+  let badgesPlayersDataSource = {};
+  let currentProfilePlayer = null;
+  let currentCharacterSlotId = "id_1";
 
   let DEFAULT_PLAYER_AVATAR = null;
   let DEFAULT_PLAYER_CHARACTER = null;
@@ -26,6 +30,35 @@
 
   function cleanProfileSlug(value) {
     return String(value || "").trim().replace(/^ID[_-]?/i, "");
+  }
+
+
+  function applyBadgesPlayerAchievements(playersJson, badgesPlayersJson) {
+    const players = playersJson && typeof playersJson === "object" ? playersJson : {};
+    const badgesPlayers = badgesPlayersJson && typeof badgesPlayersJson === "object" ? badgesPlayersJson : {};
+
+    Object.keys(players).forEach(function(playerId) {
+      const player = players[playerId];
+      if (!player || typeof player !== "object") return;
+
+      const sourceRecord = badgesPlayers[playerId];
+      const sourceAchievements = sourceRecord?.badges?.achievements;
+      const currentBadges = player.badges && typeof player.badges === "object" ? player.badges : {};
+      const nextBadges = { ...currentBadges };
+
+      // achievements não pertence mais ao profilePlayers: remova qualquer cópia antiga.
+      delete nextBadges.achievements;
+
+      if (typeof sourceAchievements !== "undefined" && sourceAchievements !== null) {
+        nextBadges.achievements = sourceAchievements;
+      }
+
+      player.badges = nextBadges;
+      // Compatibilidade antiga também não deve competir com a nova fonte.
+      if (Object.prototype.hasOwnProperty.call(player, "achievements")) delete player.achievements;
+    });
+
+    return players;
   }
 
   const escapeHtml = S.escapeHtml;
@@ -525,7 +558,7 @@
 
 
 	function getPlayerAchievementBadgeEntries(player) {
-		const entries = normalizeBadgeEntries(player?.badges?.achievements ?? player?.achievements);
+		const entries = normalizeBadgeEntries(player?.badges?.achievements);
 		if (entries.length) return entries;
 		const fallbackId = getFallbackDefaultId("achievement", "achievements_id_none");
 		return fallbackId ? [{ id: fallbackId, fallback: true }] : [];
@@ -1507,12 +1540,55 @@
     const target = prettyPath.replace(/\/$/, "");
 
     if (current !== target || window.location.search || window.location.hash) {
-      try { window.history.replaceState(null, "", prettyPath); } catch (error) {}
+      try {
+        const nextUrl = new URL(prettyPath, window.location.origin);
+        if (currentCharacterSlotId && currentCharacterSlotId !== "id_1") nextUrl.searchParams.set("slot", currentCharacterSlotId);
+        window.history.replaceState(null, "", nextUrl.pathname + nextUrl.search);
+      } catch (error) {}
     }
+  }
+
+  const CHARACTER_SLOT_IDS = ["id_1", "id_2", "id_3", "id_4"];
+
+  function getCharacterSlotIds(player) {
+    const core = window.VelarionProfileCore;
+    if (core && typeof core.getCharacterSlotIds === "function") {
+      const ids = core.getCharacterSlotIds(player);
+      return CHARACTER_SLOT_IDS.filter((id) => Array.isArray(ids) && ids.includes(id));
+    }
+    const raw = player?.theme?.card_embed?.character_slots;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return ["id_1"];
+    return CHARACTER_SLOT_IDS.filter((id) => {
+      const value = raw[id];
+      return Boolean(value && value !== false && typeof value === "object" && !Array.isArray(value));
+    });
+  }
+
+  function normalizeCharacterSlotId(value, player) {
+    const requested = CHARACTER_SLOT_IDS.includes(String(value || "").trim()) ? String(value || "").trim() : "id_1";
+    const ids = getCharacterSlotIds(player);
+    if (!ids.length) return "id_1";
+    if (ids.includes(requested)) return requested;
+    return ids.includes("id_1") ? "id_1" : ids[0];
+  }
+
+  function getRequestedCharacterSlotId() {
+    try { return new URLSearchParams(window.location.search).get("slot") || "id_1"; }
+    catch (error) { return "id_1"; }
+  }
+
+  function updateCharacterSlotUrl(slotId) {
+    try {
+      const url = new URL(window.location.href);
+      if (slotId === "id_1") url.searchParams.delete("slot");
+      else url.searchParams.set("slot", slotId);
+      window.history.replaceState(null, "", url);
+    } catch (error) {}
   }
 
   function getProfileRenderContext() {
     return {
+      characterSlotId: currentCharacterSlotId,
       escapeHtml,
       minecraftToHtml,
       stripMinecraftCodes,
@@ -1568,6 +1644,47 @@
     `;
   }
 
+  function getProfileBackgroundColor(player) {
+    const core = window.VelarionProfileCore;
+    let value;
+
+    if (core && typeof core.getCharacterSlotValue === "function") {
+      value = core.getCharacterSlotValue(player, "background_color", currentCharacterSlotId, true);
+    } else {
+      const cardEmbed = player?.theme?.card_embed;
+      const slots = cardEmbed?.character_slots;
+      const slot = slots && typeof slots === "object" && !Array.isArray(slots) ? slots[currentCharacterSlotId] : null;
+      value = slot && typeof slot === "object" && !Array.isArray(slot) && Object.prototype.hasOwnProperty.call(slot, "background_color")
+        ? slot.background_color
+        : cardEmbed?.background_color;
+    }
+
+    const color = cleanValue(value);
+    if (!color) return "";
+
+    try {
+      if (window.CSS && typeof window.CSS.supports === "function" && !window.CSS.supports("color", color)) return "";
+    } catch (error) {}
+
+    return color;
+  }
+
+  function applyProfilePageBackground(player) {
+    const root = document.getElementById("profileRoot");
+    const color = getProfileBackgroundColor(player);
+    const targets = [root, document.body, document.documentElement].filter(Boolean);
+
+    targets.forEach((target) => {
+      if (color) {
+        target.style.setProperty("--vl-profile-page-background-color", color);
+        target.classList.add("vl-has-profile-background-color");
+      } else {
+        target.style.removeProperty("--vl-profile-page-background-color");
+        target.classList.remove("vl-has-profile-background-color");
+      }
+    });
+  }
+
   function updatePageMetadata(player) {
     const display = stripMinecraftCodes(getDisplayName(player)) || getUsername(player) || "Aventureiro";
     document.title = display + " | Velarion Lumen";
@@ -1576,6 +1693,8 @@
   }
 
   function renderProfile(player) {
+    currentProfilePlayer = player;
+    currentCharacterSlotId = normalizeCharacterSlotId(currentCharacterSlotId, player);
     const root = document.getElementById("profileRoot");
     if (!root) return;
 
@@ -1586,8 +1705,31 @@
       throw new Error("VelarionProfile não foi carregado.");
     }
 
+    applyProfilePageBackground(player);
+
+    // V31 — preserve the current standalone viewport zoom across a full
+    // profile re-render (especially character-slot switches). Without this,
+    // the replacement .vl-profile-stage starts at zoom:1 and visibly jumps
+    // for a few seconds until the viewport fit runs again.
+    const previousStage = root.querySelector(".vl-profile-stage");
+    const previousViewportZoom = previousStage
+      ? String(previousStage.style.getPropertyValue("--vl-profile-viewport-zoom") || "").trim()
+      : "";
+
+    // V32 — on the very first profile render, keep the freshly-created stage
+    // invisible while its final viewport zoom is calculated. This prevents the
+    // user from seeing the stage at zoom:1 for a frame and then at the fitted
+    // zoom (the last remaining "pulse" when opening profile.html).
+    const isInitialViewportFit = !previousViewportZoom && document.body.classList.contains("vl-standalone-profile-page");
+    if (isInitialViewportFit) root.classList.add("vl-profile-initial-fitting");
+
     root.innerHTML = window.VelarionProfile.render(player, getProfileRenderContext());
     root.dataset.state = "ready";
+
+    const renderedStage = root.querySelector(".vl-profile-stage");
+    if (renderedStage && previousViewportZoom) {
+      renderedStage.style.setProperty("--vl-profile-viewport-zoom", previousViewportZoom);
+    }
 
     if (typeof window.VelarionLumenCard.hydrate === "function") {
       window.VelarionLumenCard.hydrate(root);
@@ -1604,6 +1746,58 @@
     setupAchievementGalleries(root);
     updatePageMetadata(player);
     exposePrettyProfileUrl(player);
+    // First render: calculate the final zoom before revealing the stage.
+    // Slot re-renders keep the already-stable zoom (V31). Resize/orientation/
+    // fullscreen events may still recalculate later because the viewport truly changed.
+    if (!previousViewportZoom) {
+      fitStandaloneProfileToViewport();
+      requestAnimationFrame(function() {
+        // One hidden verification pass catches any synchronous layout settling
+        // without ever exposing the intermediate size to the user.
+        fitStandaloneProfileToViewport();
+        root.classList.remove("vl-profile-initial-fitting");
+      });
+    }
+  }
+
+  let viewportFitFrame = 0;
+
+  function fitStandaloneProfileToViewport() {
+    if (!document.body.classList.contains("vl-standalone-profile-page")) return;
+    const root = document.getElementById("profileRoot");
+    const stage = root?.querySelector(".vl-profile-stage");
+    if (!root || !stage) return;
+
+    // IMPORTANT: use CSS zoom instead of transform:scale().
+    // A transform cria um novo containing block e faz os pseudo-elementos
+    // position:fixed do fundo passarem a ficar presos ao retângulo do stage.
+    // Isso era a origem do "quadrado" visual da V29.
+    stage.style.setProperty("--vl-profile-viewport-zoom", "1");
+
+    const viewportWidth = Math.max(1, window.innerWidth || document.documentElement.clientWidth || 1);
+    const viewportHeight = Math.max(1, window.innerHeight || document.documentElement.clientHeight || 1);
+    const naturalWidth = Math.max(stage.scrollWidth, stage.offsetWidth, 1);
+    const naturalHeight = Math.max(stage.scrollHeight, stage.offsetHeight, 1);
+
+    const safeWidth = Math.max(1, viewportWidth - 4);
+    const safeHeight = Math.max(1, viewportHeight - 4);
+    const scale = Math.min(1, safeWidth / naturalWidth, safeHeight / naturalHeight);
+    const normalized = Number.isFinite(scale) ? Math.max(0.55, scale) : 1;
+
+    stage.style.setProperty("--vl-profile-viewport-zoom", normalized.toFixed(5));
+    root.style.height = "100dvh";
+    root.style.minHeight = "0";
+    root.style.overflow = "hidden";
+  }
+
+  function scheduleStandaloneViewportFit() {
+    // Um único cálculo estável. Não observa mutações/classes/estilos do stage:
+    // esses observers formavam um feedback loop (mede -> altera style -> observa
+    // -> mede novamente), responsável pelo "pulsar" ao abrir/clicar na V29.
+    cancelAnimationFrame(viewportFitFrame);
+    viewportFitFrame = requestAnimationFrame(function() {
+      viewportFitFrame = requestAnimationFrame(fitStandaloneProfileToViewport);
+    });
   }
 
   async function bootProfilePage() {
@@ -1616,8 +1810,9 @@
     setPageState("loading", "Abrindo registro", "Buscando o aventureiro " + slug + " no Codex.");
 
     try {
-      const [playersJson, extensionsJson, serverPanelJson, websitePanelJson, clansJson] = await Promise.all([
+      const [playersJson, badgesPlayersJson, extensionsJson, serverPanelJson, websitePanelJson, clansJson] = await Promise.all([
         fetchJsonSafe(PLAYER_DATA_URL),
+        fetchJsonSafe(BADGES_PLAYER_DATA_URL),
         fetchJsonSafe(EXTENSIONS_DATA_URL),
         fetchJsonSafe(SERVER_PANEL_DATA_URL),
         fetchJsonSafe(WEBSITE_PANEL_DATA_URL),
@@ -1629,10 +1824,11 @@
       extensionsData = attachServerPanelData(extensionsJson || {}, serverPanelJson || {});
       websitePanelData = websitePanelJson && typeof websitePanelJson === "object" ? websitePanelJson : null;
       clansData = normalizeClans(clansJson || {});
-      profilePlayersDataSource = playersJson || {};
+      badgesPlayersDataSource = badgesPlayersJson && typeof badgesPlayersJson === "object" ? badgesPlayersJson : {};
+      profilePlayersDataSource = applyBadgesPlayerAchievements(playersJson || {}, badgesPlayersDataSource);
       applyExtensionDataConfig();
 
-      const players = normalize(playersJson).filter(function(player) {
+      const players = normalize(profilePlayersDataSource).filter(function(player) {
         if (!player || typeof player !== "object") return false;
         if (player.public_profile === false) return false;
         if (player.profile && player.profile.public_profile === false) return false;
@@ -1648,12 +1844,26 @@
       if (window.VelarionProfile?.componentsReady) {
         await window.VelarionProfile.componentsReady;
       }
+      currentCharacterSlotId = normalizeCharacterSlotId(getRequestedCharacterSlotId(), player);
       renderProfile(player);
     } catch (error) {
       console.error("[VelarionProfilePage]", error);
       setPageState("error", "Falha ao abrir o perfil", error?.message || "Não foi possível carregar este registro agora.");
     }
   }
+
+  document.addEventListener("velarion:character-slot-change", function(event) {
+    if (!currentProfilePlayer) return;
+    const next = normalizeCharacterSlotId(event?.detail?.characterSlotId, currentProfilePlayer);
+    if (next === currentCharacterSlotId) return;
+    currentCharacterSlotId = next;
+    updateCharacterSlotUrl(next);
+    renderProfile(currentProfilePlayer);
+  });
+
+  window.addEventListener("resize", scheduleStandaloneViewportFit, { passive: true });
+  window.addEventListener("orientationchange", scheduleStandaloneViewportFit, { passive: true });
+  document.addEventListener("fullscreenchange", scheduleStandaloneViewportFit);
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", bootProfilePage, { once: true });

@@ -1,10 +1,46 @@
-/* ======================================================================
-   Velarion Profile — Registro Público renderer/runtime independente
-   ====================================================================== */
-(function(window, document) {
+/*
+ * Velarion Profile — Public Record
+ * Rebuild organizado / composição somente.
+ *
+ * OWNERSHIP MAP
+ * ------------------------------------------------------------------
+ * Public Record owns:
+ *   1) outer layout;
+ *   2) character stage + HUD;
+ *   3) placement of Username / Public Data;
+ *   4) Cargo / Rank switcher placement;
+ *   5) the isolated card_color decorative layer.
+ *
+ * Public Record DOES NOT own the visual theme of:
+ *   - Username  -> velarion-profile-username.css
+ *   - Stats     -> velarion-profile-stats.css
+ *   - Cargo     -> velarion-profile-cargo.css
+ *   - Rank      -> velarion-profile-rank.css
+ *
+ * IMPORTANT COLOR ISOLATION
+ * ------------------------------------------------------------------
+ * card_color variables live ONLY on .vl-pr__card-color-layer.
+ * The left profile zone receives a fixed #FCFCFF theme via CSS.
+ * Cargo/Rank therefore never inherit card_color from this module.
+ */
+(function (window, document) {
   "use strict";
 
   if (window.VelarionProfilePublicRecord) return;
+
+  const FIXED_PROFILE_COLOR = "#FCFCFF";
+
+  const SELECTOR = Object.freeze({
+    colorLayer: "[data-vl-pr-card-color-layer]",
+    switcher: "[data-vl-public-systems-switcher]",
+    subPage: "[data-vl-public-subpage]",
+    subNav: "[data-vl-public-subnav]",
+    publicRoot: ".vl-pr",
+    infoStack: ".vl-pr__info-stack",
+    scannerHud: ".vl-pr__hud",
+    scannerRotorOuter: '[data-vl-pr-scanner-rotor="outer"]',
+    scannerRotorInner: '[data-vl-pr-scanner-rotor="inner"]'
+  });
 
   function core() {
     const api = window.VelarionProfileCore;
@@ -12,140 +48,156 @@
     return api;
   }
 
-  function getRarityId(player) {
+  function requireComponent(name, api) {
+    if (!api || typeof api.render !== "function") {
+      throw new Error(`VelarionProfilePublicRecord requer ${name}.js.`);
+    }
+    return api;
+  }
+
+  function resolveFallbackMediaValue(ctx, kind, value, fallbackKey = "default") {
     const C = core();
-    const raw = player?.stats?.rarity;
-    if (typeof raw === "string" || typeof raw === "number") return C.cleanValue(raw);
-    if (raw && typeof raw === "object") return C.cleanValue(raw.id || raw.rarity_id || raw.value);
-    return C.cleanValue(player?.badges?.rarity_id || player?.badges?.rarity || player?.rarity_id);
+    const raw = C.getMediaSource(value);
+
+    if (!raw) return C.getMediaSource(C.getFallbackMedia(ctx, kind, "", fallbackKey));
+
+    const fallbackRef = /^fallbacks_id_(.+)$/i.exec(C.cleanValue(raw));
+    if (!fallbackRef) return raw;
+
+    return (
+      C.getMediaSource(C.getFallbackMedia(ctx, kind, "", fallbackRef[1])) ||
+      C.getMediaSource(C.getFallbackMedia(ctx, kind, "", fallbackKey))
+    );
   }
 
-  function getRoleLabel(player) {
-    return core().stripMinecraftCodes(player?.badges?.role || player?.rank?.role || player?.clan?.rank || player?.role || "Sem cargo");
-  }
-
-  function getRankLabel(player) {
-    return core().stripMinecraftCodes(player?.badges?.rank || player?.rank?.name || player?.rank?.role || "Sem rank");
-  }
-
-  function fallbackRole(player) {
+  function resolveCharacter(player, ctx) {
     const C = core();
-    return `<div class="vl-public-module-badge-card"><strong>${C.escapeHtml(getRoleLabel(player))}</strong><span>Cargo principal</span></div>`;
-  }
+    const characterSlot = C.resolveCharacterSlot(player, ctx.characterSlotId || "id_1");
+    const slotData = characterSlot.data || {};
 
-  function fallbackRank(player) {
-    const C = core();
-    return `<div class="vl-public-module-badge-card"><strong>${C.escapeHtml(getRankLabel(player))}</strong><span>Rank atual</span></div>`;
-  }
+    const mediaValue = Object.prototype.hasOwnProperty.call(slotData, "character_image")
+      ? slotData.character_image
+      : player?.theme?.card_embed?.character_image;
 
-  function buildPublicHelpers(ctx) {
-    const C = core();
+    const fallbackKey = C.cleanValue(player?.profile?.gender) || C.cleanValue(player?.gender) || "default";
+    const fallback = C.getMediaSource(C.getFallbackMedia(ctx, "character", "", fallbackKey));
+    const source = resolveFallbackMediaValue(ctx, "character", mediaValue, fallbackKey) || fallback;
+
     return {
-      buildRoleInfoEmblemHtml: C.pick(ctx, "buildRoleInfoEmblemHtml", fallbackRole),
-      buildRankInfoEmblemHtml: C.pick(ctx, "buildRankInfoEmblemHtml", fallbackRank)
+      slot: characterSlot,
+      slotData,
+      source,
+      fallback,
+      isWebM: C.isWebMMedia(source),
+      fallbackIsWebM: C.isWebMMedia(fallback)
     };
+  }
+
+  function resolveCardColor(player, slotData) {
+    const C = core();
+    const raw = Object.prototype.hasOwnProperty.call(slotData, "card_color")
+      ? slotData.card_color
+      : player?.theme?.card_embed?.card_color;
+
+    const config = C.normalizeCardColorConfig(raw, "#8b6cff");
+    const colors = Array.isArray(config.colors) && config.colors.length
+      ? config.colors
+      : [config.primary || "#8b6cff"];
+
+    return {
+      type: C.normalizeCardColorType(config.type || "none"),
+      speed: C.normalizeCardColorSpeed(config.speed, 10),
+      primary: config.primary || colors[0] || "#8b6cff",
+      colors,
+      gradient: C.buildPaletteGradient(colors, "115deg"),
+      loopGradient: C.buildPaletteLoopGradient(colors, "115deg")
+    };
+  }
+
+  function renderCharacterMedia(character, esc) {
+    if (!character.source) return "";
+
+    const fallbackAttrs = [
+      `data-vl-character-fallback="${esc(character.fallback)}"`,
+      `data-vl-character-fallback-webm="${character.fallbackIsWebM ? "1" : "0"}"`
+    ].join(" ");
+
+    if (character.isWebM) {
+      return `<video src="${esc(character.source)}" autoplay loop muted playsinline preload="auto" tabindex="-1" ${fallbackAttrs} onerror="window.VelarionProfilePublicRecord?.applyCharacterMediaFallback?.(this)"></video>`;
+    }
+
+    return `<img src="${esc(character.source)}" alt="" loading="eager" decoding="async" ${fallbackAttrs} onerror="window.VelarionProfilePublicRecord?.applyCharacterMediaFallback?.(this)">`;
   }
 
   function render(player, context) {
     const C = core();
     const ctx = context || {};
-    const h = buildPublicHelpers(ctx);
-    const extensions = ctx?.extensionsData || {};
-    const source = extensions.badges_raritys || extensions.badges_rarities || {};
-    const rarityId = getRarityId(player);
     const esc = (value) => C.escapeHtml(String(value ?? ""));
 
-    const aliases = rarityId ? [
-      rarityId,
-      rarityId.replace(/^rarity_id_/i, "raritys_id_"),
-      rarityId.replace(/^raritys_id_/i, "rarity_id_")
-    ] : [];
+    const username = requireComponent("velarion-profile-username", window.VelarionProfileUsername);
+    const stats = requireComponent("velarion-profile-stats", window.VelarionProfileStats);
+    const cargo = requireComponent("velarion-profile-cargo", window.VelarionProfileCargo);
+    const rank = requireComponent("velarion-profile-rank", window.VelarionProfileRank);
 
-    const rarityKey = aliases.find((key) => source?.[key]) || "";
-    const rarityData = C.mergeBadge(rarityKey ? source[rarityKey] : null) || {};
+    const character = resolveCharacter(player, ctx);
+    const cardColor = resolveCardColor(player, character.slotData);
 
-    /* Mantém a mesma leitura de estrelas da implementação anterior. */
-    const starsValue = rarityData.website?.stars ?? rarityData.stars ?? rarityData.profile?.stars ?? "";
-    let stars = 0;
-    let maxStars = Number(rarityData.website?.max_stars ?? rarityData.max_stars ?? rarityData.profile?.max_stars ?? 0);
-    if (typeof starsValue === "number" || /^\d+(?:\.\d+)?$/.test(String(starsValue).trim())) {
-      stars = Math.max(0, Math.round(Number(starsValue)));
-    } else {
-      stars = Math.max(0, (C.cleanValue(starsValue).match(/★/g) || []).length);
-    }
-    if (!Number.isFinite(maxStars) || maxStars <= 0) maxStars = stars;
-    if (maxStars < stars) maxStars = stars;
-
-    const stats = player?.stats && typeof player.stats === "object" ? player.stats : {};
-    const combat = stats?.combat && typeof stats.combat === "object" ? stats.combat : {};
-    const rarityStats = stats?.rarity && typeof stats.rarity === "object" ? stats.rarity : {};
-
-    const publicInfoUsername =
-      C.cleanValue(player?.profile?.display_username) ||
-      C.cleanValue(player?.display_username) ||
-      C.cleanValue(player?.id) ||
-      "—";
-
-    const publicInfoRegisteredAt = C.cleanValue(stats?.timestamps?.account_created_at);
-
-    const formatDocumentDateTime = (value) => {
-      const raw = C.cleanValue(value);
-      if (!raw) return "—";
-      const date = new Date(raw);
-      if (Number.isNaN(date.getTime())) return raw;
-      try {
-        return new Intl.DateTimeFormat("pt-BR", {
-          day: "2-digit",
-          month: "2-digit",
-          year: "numeric",
-          hour: "2-digit",
-          minute: "2-digit",
-          second: "2-digit"
-        }).format(date);
-      } catch (_) {
-        return raw;
-      }
-    };
-
-    const asNumber = (value, fallback = 0) => {
-      const parsed = Number(value);
-      return Number.isFinite(parsed) ? parsed : fallback;
-    };
-
-    const formatInteger = (value) => new Intl.NumberFormat("pt-BR", {
-      maximumFractionDigits: 0
-    }).format(Math.max(0, Math.round(asNumber(value, 0))));
-
-    const formatRatio = (value) => {
-      const number = asNumber(value, 0);
-      return Number.isInteger(number) ? String(number) : number.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
-    };
-
-    const normalizeRarityLabel = (value) => {
-      const raw = C.cleanValue(value);
-      if (!raw) return "—";
-      return raw
-        .replace(/^raritys?_id_/i, "")
-        .replace(/^rarity_id_/i, "")
-        .replace(/[_-]+/g, " ")
-        .trim()
-        .toUpperCase() || "—";
-    };
-
-    const characterMediaRaw = player?.theme?.card_embed?.character_image;
-    const configuredCharacterImage = C.getMediaSource(characterMediaRaw);
-    const characterFallbackKey = C.cleanValue(player?.profile?.gender) || C.cleanValue(player?.gender) || "default";
-    const fallbackCharacterImage = C.getMediaSource(C.getFallbackMedia(ctx, "character", "", characterFallbackKey));
-    const characterImage = configuredCharacterImage || fallbackCharacterImage;
-    const characterIsWebM = C.isWebMMedia(characterImage);
-    const fallbackCharacterIsWebM = C.isWebMMedia(fallbackCharacterImage);
+    const rootState = character.source ? "has-character" : "no-character";
+    const characterClass = character.isWebM ? "is-webm" : "is-image";
 
     return `
-      <div class="vl-public-stars-only ${characterImage ? "has-character" : "no-character"}" data-vl-public-stars="${esc(stars)}" data-vl-public-max-stars="${esc(maxStars)}">
+      <div
+        class="vl-public-stars-only vl-pr ${rootState}"
+        data-character-slot-id="${esc(character.slot.id || "id_1")}"
+        data-character-slot-count="${esc(character.slot.ids.length || 1)}"
+        data-vl-pr-card-color-type="${esc(cardColor.type)}"
+      >
+        <!-- CARD_COLOR: isolated decorative channel. Never wraps child components. -->
+        <div
+          class="vl-pr__card-color-layer"
+          data-vl-pr-card-color-layer
+          data-card-color-type="${esc(cardColor.type)}"
+          data-card-color-speed="${esc(cardColor.speed)}"
+          data-card-color-palette="${esc(cardColor.colors.join(","))}"
+          style="--vpr-card-current:${esc(cardColor.primary)};--vpr-card-speed:${esc(cardColor.speed)}s;--vpr-card-gradient:${esc(cardColor.gradient)};--vpr-card-loop-gradient:${esc(cardColor.loopGradient)};"
+          aria-hidden="true"
+        ></div>
 
-        <div class="vl-public-stars-only__left-zone">
-          <div class="vl-public-stars-only__visual" aria-hidden="true">
-            <div class="vl-public-stars-only__effects">
+        <!-- FIXED PROFILE ZONE: #FCFCFF; card_color is intentionally not inherited here. -->
+        <section class="vl-public-stars-only__left-zone vl-pr__left-zone vl-pr__fixed-theme" style="--vpr-fixed-color:${FIXED_PROFILE_COLOR};">
+          <div class="vl-public-stars-only__visual vl-pr__character-stage" aria-hidden="true">
+            <div class="vl-pr__tech-layer" aria-hidden="true">
+              <span class="vl-pr__tech-particle vl-pr__tech-particle--1"></span>
+              <span class="vl-pr__tech-particle vl-pr__tech-particle--2"></span>
+              <span class="vl-pr__tech-particle vl-pr__tech-particle--3"></span>
+              <span class="vl-pr__tech-particle vl-pr__tech-particle--4"></span>
+              <span class="vl-pr__tech-particle vl-pr__tech-particle--5"></span>
+              <span class="vl-pr__tech-particle vl-pr__tech-particle--6"></span>
+              <span class="vl-pr__tech-particle vl-pr__tech-particle--7"></span>
+              <span class="vl-pr__tech-particle vl-pr__tech-particle--8"></span>
+              <span class="vl-pr__tech-diamond vl-pr__tech-diamond--1"></span>
+              <span class="vl-pr__tech-diamond vl-pr__tech-diamond--2"></span>
+              <span class="vl-pr__tech-diamond vl-pr__tech-diamond--3"></span>
+              <span class="vl-pr__tech-line vl-pr__tech-line--1"></span>
+              <span class="vl-pr__tech-line vl-pr__tech-line--2"></span>
+              <span class="vl-pr__tech-line vl-pr__tech-line--3"></span>
+              <span class="vl-pr__tech-line vl-pr__tech-line--4"></span>
+              <span class="vl-pr__tech-bracket vl-pr__tech-bracket--1"></span>
+              <span class="vl-pr__tech-bracket vl-pr__tech-bracket--2"></span>
+              <span class="vl-pr__tech-reticle vl-pr__tech-reticle--1"><i></i></span>
+              <span class="vl-pr__tech-reticle vl-pr__tech-reticle--2"><i></i></span>
+              <span class="vl-pr__tech-reticle vl-pr__tech-reticle--3"><i></i></span>
+              <span class="vl-pr__tech-reticle vl-pr__tech-reticle--4"><i></i></span>
+              <span class="vl-pr__tech-tick vl-pr__tech-tick--1"></span>
+              <span class="vl-pr__tech-tick vl-pr__tech-tick--2"></span>
+              <span class="vl-pr__tech-tick vl-pr__tech-tick--3"></span>
+            </div>
+
+            <div class="vl-public-stars-only__effects vl-pr__hud">
+              <!-- Same PNG, cropped to the circular scanner only. These two layers
+                   animate the artwork without replacing the PNG with CSS/SVG. -->
+              <span class="vl-pr__scanner-rotor vl-pr__scanner-rotor--outer" data-vl-pr-scanner-rotor="outer"></span>
+              <span class="vl-pr__scanner-rotor vl-pr__scanner-rotor--inner" data-vl-pr-scanner-rotor="inner"></span>
               <span class="vl-public-stars-only__ring vl-public-stars-only__ring--one"></span>
               <span class="vl-public-stars-only__ring vl-public-stars-only__ring--two"></span>
               <span class="vl-public-stars-only__diamond vl-public-stars-only__diamond--one"></span>
@@ -153,127 +205,50 @@
               <span class="vl-public-stars-only__diamond vl-public-stars-only__diamond--three"></span>
             </div>
 
-            ${characterImage ? `
-              <div class="vl-public-stars-only__character ${characterIsWebM ? "is-webm" : "is-image"}">
-                ${characterIsWebM
-                  ? `<video
-                       src="${esc(characterImage)}"
-                       autoplay
-                       loop
-                       muted
-                       playsinline
-                       preload="auto"
-                       tabindex="-1"
-                       data-vl-character-fallback="${esc(fallbackCharacterImage)}"
-                       data-vl-character-fallback-webm="${fallbackCharacterIsWebM ? "1" : "0"}"
-                       onerror="window.VelarionProfilePublicRecord?.applyCharacterMediaFallback?.(this)"
-                     ></video>`
-                  : `<img
-                       src="${esc(characterImage)}"
-                       alt=""
-                       loading="eager"
-                       decoding="async"
-                       data-vl-character-fallback="${esc(fallbackCharacterImage)}"
-                       data-vl-character-fallback-webm="${fallbackCharacterIsWebM ? "1" : "0"}"
-                       onerror="window.VelarionProfilePublicRecord?.applyCharacterMediaFallback?.(this)"
-                     >`
-                }
-              </div>` : ""}
+
+            ${character.source ? `<div class="vl-public-stars-only__character vl-pr__character ${characterClass}">${renderCharacterMedia(character, esc)}</div>` : ""}
+
           </div>
 
-          <div class="vl-public-info-stack vl-public-info-stack--document">
-            <section class="vl-adventurer-document" aria-label="Documento público do jogador">
-              <div class="vl-adventurer-document__top">
-                <span class="vl-adventurer-document__sigil" aria-hidden="true"><i></i></span>
-                <div class="vl-adventurer-document__title vl-adventurer-document__title--username">
-                  <strong>${esc(publicInfoUsername)}</strong>
-                </div>
-              </div>
-
-              <div class="vl-adventurer-document__divider" aria-hidden="true"></div>
-
-              <div class="vl-adventurer-document__rows vl-adventurer-document__rows--single">
-                <div class="vl-adventurer-document__row vl-adventurer-document__row--registration">
-                  <span class="vl-adventurer-document__row-icon" aria-hidden="true">◷</span>
-                  <div>
-                    <small>Registro</small>
-                    <strong>${esc(formatDocumentDateTime(publicInfoRegisteredAt))}</strong>
-                  </div>
-                </div>
-              </div>
-            </section>
-
-            <aside class="vl-public-secondary vl-public-secondary--compact vl-public-quickstats vl-public-quickstats--rebuild"
-                   aria-label="Dados públicos do jogador">
-              <div class="vl-public-quickstats__frame-corner vl-public-quickstats__frame-corner--tl" aria-hidden="true"></div>
-              <div class="vl-public-quickstats__frame-corner vl-public-quickstats__frame-corner--br" aria-hidden="true"></div>
-
-              <div class="vl-public-secondary__topline vl-public-quickstats__header">
-                <span>Dados públicos</span>
-                <small>Resumo</small>
-              </div>
-
-              <section class="vl-public-quickstats__rarity vl-public-quickstats__rarity--hero" aria-label="Rarity">
-                <span class="vl-public-quickstats__rarity-mark vl-public-quickstats__rarity-mark--hero" aria-hidden="true"><i></i></span>
-                <div class="vl-public-quickstats__rarity-copy vl-public-quickstats__rarity-copy--hero">
-                  <strong>${esc(normalizeRarityLabel(rarityStats.id))}</strong>
-                  <small>Rarity</small>
-                </div>
-              </section>
-
-              <div class="vl-public-quickstats__divider"></div>
-
-              <section class="vl-public-quickstats__combat vl-public-quickstats__combat--hero" aria-label="Estatísticas de combate">
-                <div class="vl-public-quickstats__combat-title">
-                  <span class="vl-public-quickstats__combat-icon" aria-hidden="true">⚔</span>
-                  <strong>Combate</strong>
-                </div>
-                <div class="vl-public-quickstats__combat-grid vl-public-quickstats__combat-grid--hero">
-                  <span><small>Kills</small><strong>${esc(formatInteger(combat.kills))}</strong></span>
-                  <span><small>Deaths</small><strong>${esc(formatInteger(combat.deaths))}</strong></span>
-                  <span><small>Assists</small><strong>${esc(formatInteger(combat.assists))}</strong></span>
-                  <span><small>K/D</small><strong>${esc(formatRatio(combat.kd_ratio))}</strong></span>
-                </div>
-              </section>
-            </aside>
+          <div class="vl-public-info-stack vl-public-info-stack--document vl-pr__info-stack">
+            ${username.render(player, ctx)}
+            ${stats.render(player, ctx)}
           </div>
-        </div>
+        </section>
 
-        <div class="vl-public-stars-only__right-zone">
-          <div class="vl-public-systems-switcher" data-vl-public-systems-switcher data-subpage-index="0" data-sub-direction="none">
-            <button class="vl-public-systems-switcher__nav vl-public-systems-switcher__nav--next"
-                    type="button" data-vl-public-subnav="1" aria-label="Avançar para Rank">
+        <!-- SYSTEMS ZONE: layout only. Cargo/Rank keep their own --sz-* themes. -->
+        <section class="vl-public-stars-only__right-zone vl-pr__systems-zone">
+          <div class="vl-public-systems-switcher vl-pr__switcher" data-vl-public-systems-switcher data-subpage-index="0" data-sub-direction="none">
+            <button class="vl-public-systems-switcher__nav vl-public-systems-switcher__nav--next" type="button" data-vl-public-subnav="1" aria-label="Avançar">
               <span aria-hidden="true">›</span>
             </button>
 
             <div class="vl-public-systems-switcher__viewport">
-              <article class="vl-public-systems-switcher__page is-active"
-                       data-vl-public-subpage data-vl-public-subpage-label="Cargo" aria-hidden="false">
-                <div class="vl-public-systems-switcher__content">
-                  ${h.buildRoleInfoEmblemHtml(player)}
-                </div>
+              <article class="vl-public-systems-switcher__page is-active" data-vl-public-subpage data-vl-public-subpage-label="Cargo" aria-hidden="false">
+                <div class="vl-public-systems-switcher__content">${cargo.render(player, ctx)}</div>
               </article>
-
-              <article class="vl-public-systems-switcher__page"
-                       data-vl-public-subpage data-vl-public-subpage-label="Rank" aria-hidden="true" inert>
-                <div class="vl-public-systems-switcher__content">
-                  ${h.buildRankInfoEmblemHtml(player)}
-                </div>
+              <article class="vl-public-systems-switcher__page" data-vl-public-subpage data-vl-public-subpage-label="Rank" aria-hidden="true" inert>
+                <div class="vl-public-systems-switcher__content">${rank.render(player, ctx)}</div>
               </article>
             </div>
           </div>
-        </div>
+        </section>
       </div>`;
   }
 
+  /* -----------------------------------------------------------------
+   * Systems sub-navigation
+   * ----------------------------------------------------------------- */
   let publicSystemsSubNavigationReady = false;
 
-  function setPublicSystemsSubPage(root, nextIndex, direction = 0) {
+  function setPublicSystemsSubPage(root, requestedIndex, direction = 0) {
     if (!root) return;
-    const pages = Array.from(root.querySelectorAll("[data-vl-public-subpage]"));
+
+    const pages = Array.from(root.querySelectorAll(SELECTOR.subPage));
     if (!pages.length) return;
+
     const total = pages.length;
-    const index = ((Number(nextIndex) % total) + total) % total;
+    const index = ((Number(requestedIndex) % total) + total) % total;
 
     pages.forEach((page, pageIndex) => {
       const active = pageIndex === index;
@@ -286,21 +261,15 @@
     root.dataset.subpageIndex = String(index);
     root.dataset.subDirection = direction < 0 ? "prev" : direction > 0 ? "next" : "none";
 
-    const current = pages[index];
-    const label = current?.dataset.vlPublicSubpageLabel || `Página ${index + 1}`;
-    const labelNode = root.querySelector("[data-vl-public-subpage-current]");
-    if (labelNode) labelNode.textContent = label;
-    const counter = root.querySelector("[data-vl-public-subpage-counter]");
-    if (counter) counter.textContent = `${String(index + 1).padStart(2, "0")} / ${String(total).padStart(2, "0")}`;
-
-    root.querySelectorAll("[data-vl-public-subnav]").forEach((button) => {
+    root.querySelectorAll(SELECTOR.subNav).forEach((button) => {
       const delta = Number(button.dataset.vlPublicSubnav || 0);
       const targetIndex = ((index + delta) % total + total) % total;
-      const targetLabel = pages[targetIndex]?.dataset.vlPublicSubpageLabel || `Página ${targetIndex + 1}`;
-      button.setAttribute("aria-label", delta < 0 ? `Voltar para ${targetLabel}` : `Avançar para ${targetLabel}`);
-      button.title = delta < 0 ? `Voltar: ${targetLabel}` : `Próximo: ${targetLabel}`;
+      const label = pages[targetIndex]?.dataset.vlPublicSubpageLabel || `Página ${targetIndex + 1}`;
+      button.setAttribute("aria-label", delta < 0 ? `Voltar para ${label}` : `Avançar para ${label}`);
+      button.title = delta < 0 ? `Voltar: ${label}` : `Próximo: ${label}`;
     });
 
+    const current = pages[index];
     if (current) {
       current.classList.remove("vl-public-systems-switcher__page--enter");
       void current.offsetWidth;
@@ -311,24 +280,32 @@
   function ensurePublicSystemsSubNavigation() {
     if (publicSystemsSubNavigationReady) return;
     publicSystemsSubNavigationReady = true;
+
     document.addEventListener("click", (event) => {
-      const button = event.target.closest?.("[data-vl-public-subnav]");
+      const button = event.target.closest?.(SELECTOR.subNav);
       if (!button) return;
-      const root = button.closest("[data-vl-public-systems-switcher]");
+
+      const root = button.closest(SELECTOR.switcher);
       if (!root) return;
-      const current = Number(root.dataset.subpageIndex || 0);
+
       const delta = Number(button.dataset.vlPublicSubnav || 0);
       if (!delta) return;
+
       event.preventDefault();
       event.stopPropagation();
-      setPublicSystemsSubPage(root, current + delta, delta);
+      setPublicSystemsSubPage(root, Number(root.dataset.subpageIndex || 0) + delta, delta);
     });
   }
 
+  /* -----------------------------------------------------------------
+   * Character fallback
+   * ----------------------------------------------------------------- */
   function applyCharacterMediaFallback(element) {
     const C = core();
     element?.removeAttribute?.("data-vl-fallback-pending");
+
     if (!element || element.dataset.vlFallbackApplied === "1") return;
+
     const fallback = C.cleanValue(element.dataset.vlCharacterFallback);
     if (!fallback) {
       element.remove();
@@ -337,6 +314,7 @@
 
     element.dataset.vlFallbackApplied = "1";
     const fallbackIsWebM = element.dataset.vlCharacterFallbackWebm === "1";
+
     if (fallbackIsWebM && element.tagName !== "VIDEO") {
       const video = document.createElement("video");
       video.src = fallback;
@@ -368,10 +346,145 @@
     element.onerror = () => element.remove();
   }
 
+  /* -----------------------------------------------------------------
+   * Local color compatibility helpers.
+   * Do not depend on optional VelarionProfileCore helpers that may not exist
+   * in older/current profile-core builds.
+   * ----------------------------------------------------------------- */
+  function isValidHexColor(value) {
+    return /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(String(value || "").trim());
+  }
+
+  function normalizeHex6(value) {
+    const raw = String(value || "").trim();
+    if (!isValidHexColor(raw)) return null;
+    if (raw.length === 4) {
+      return `#${raw[1]}${raw[1]}${raw[2]}${raw[2]}${raw[3]}${raw[3]}`.toLowerCase();
+    }
+    return raw.toLowerCase();
+  }
+
+  function interpolateHexColorLocal(from, to, progress) {
+    const a = normalizeHex6(from);
+    const b = normalizeHex6(to);
+    if (!a || !b) return a || b || "#8b6cff";
+
+    const t = Math.max(0, Math.min(1, Number(progress) || 0));
+    const ar = parseInt(a.slice(1, 3), 16);
+    const ag = parseInt(a.slice(3, 5), 16);
+    const ab = parseInt(a.slice(5, 7), 16);
+    const br = parseInt(b.slice(1, 3), 16);
+    const bg = parseInt(b.slice(3, 5), 16);
+    const bb = parseInt(b.slice(5, 7), 16);
+
+    const channel = (x, y) => Math.round(x + (y - x) * t).toString(16).padStart(2, "0");
+    return `#${channel(ar, br)}${channel(ag, bg)}${channel(ab, bb)}`;
+  }
+
+  /* -----------------------------------------------------------------
+   * card_color runtime — ONLY .vl-pr__card-color-layer is mutated.
+   * ----------------------------------------------------------------- */
+  const cardColorRuntime = {
+    nodes: new Set(),
+    raf: 0,
+    startedAt: performance.now()
+  };
+
+  function getRuntimePalette(layer) {
+    const C = core();
+    return String(layer?.dataset?.cardColorPalette || "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter((value) => isValidHexColor(value));
+  }
+
+  function applyDynamicCardColor(layer, color) {
+    const C = core();
+    if (!layer || !isValidHexColor(color)) return;
+    layer.style.setProperty("--vpr-card-current", color);
+  }
+
+  function updateAnimatedCardColors(now) {
+    const C = core();
+    let hasAnimatedNode = false;
+
+    cardColorRuntime.nodes.forEach((layer) => {
+      if (!layer || !layer.isConnected) {
+        cardColorRuntime.nodes.delete(layer);
+        return;
+      }
+
+      const type = C.normalizeCardColorType(layer.dataset.cardColorType);
+      const colors = getRuntimePalette(layer);
+      if (colors.length < 2 || !["rotate", "pulse"].includes(type)) return;
+
+      hasAnimatedNode = true;
+
+      const speed = C.normalizeCardColorSpeed(layer.dataset.cardColorSpeed, 10);
+      const elapsedSeconds = (now - cardColorRuntime.startedAt) / 1000;
+      const cycle = ((elapsedSeconds % speed) / speed) * colors.length;
+      const baseIndex = Math.floor(cycle) % colors.length;
+      const nextIndex = (baseIndex + 1) % colors.length;
+      const localProgress = cycle - Math.floor(cycle);
+
+      if (type === "rotate") {
+        const previousIndex = Number(layer.dataset.vlPrCardColorRuntimeIndex ?? -1);
+        if (previousIndex !== baseIndex) {
+          layer.dataset.vlPrCardColorRuntimeIndex = String(baseIndex);
+          applyDynamicCardColor(layer, colors[baseIndex]);
+        }
+        return;
+      }
+
+      const eased = localProgress * localProgress * (3 - 2 * localProgress);
+      applyDynamicCardColor(layer, typeof C.interpolateHexColor === "function"
+        ? C.interpolateHexColor(colors[baseIndex], colors[nextIndex], eased)
+        : interpolateHexColorLocal(colors[baseIndex], colors[nextIndex], eased));
+    });
+
+    if (hasAnimatedNode || cardColorRuntime.nodes.size) {
+      cardColorRuntime.raf = requestAnimationFrame(updateAnimatedCardColors);
+    } else {
+      cardColorRuntime.raf = 0;
+    }
+  }
+
+  function setupCardColorEffects(root) {
+    const C = core();
+    const scope = root || document;
+
+    scope.querySelectorAll?.(SELECTOR.colorLayer).forEach((layer) => {
+      if (layer.dataset.vlPrCardColorBound === "true") return;
+      layer.dataset.vlPrCardColorBound = "true";
+
+      const colors = getRuntimePalette(layer);
+      const type = C.normalizeCardColorType(layer.dataset.cardColorType);
+
+      if (colors.length) applyDynamicCardColor(layer, colors[0]);
+      if (colors.length > 1 && ["rotate", "pulse"].includes(type)) {
+        cardColorRuntime.nodes.add(layer);
+      }
+    });
+
+    if (cardColorRuntime.nodes.size && !cardColorRuntime.raf) {
+      cardColorRuntime.startedAt = performance.now();
+      cardColorRuntime.raf = requestAnimationFrame(updateAnimatedCardColors);
+    }
+  }
+
   function hydrate(root) {
     ensurePublicSystemsSubNavigation();
     const scope = root || document;
     scope.querySelectorAll?.('[data-vl-fallback-pending="1"]').forEach(applyCharacterMediaFallback);
+
+    /* Scanner/Micro-HUD motion is independent from optional card_color runtime. */
+    setupLeftFxMotion(scope);
+
+    try {
+      setupCardColorEffects(scope);
+    } catch (error) {
+      console.warn("[VelarionProfilePublicRecord] card_color runtime ignorado por incompatibilidade de Core.", error);
+    }
   }
 
   window.VelarionProfilePublicRecord = {
